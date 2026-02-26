@@ -14,8 +14,18 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-              "function_name": "",
-              "args": []
+              "function_name": "draw_credit",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "i128": {
+                    "hi": 9223372036854775807,
+                    "lo": 18446744073709551614
+                  }
+                }
+              ]
             }
           },
           "sub_invocations": []
@@ -30,8 +40,18 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-              "function_name": "",
-              "args": []
+              "function_name": "draw_credit",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1
+                  }
+                }
+              ]
             }
           },
           "sub_invocations": []
@@ -153,8 +173,8 @@
                       },
                       "val": {
                         "i128": {
-                          "hi": 0,
-                          "lo": 1000
+                          "hi": 9223372036854775807,
+                          "lo": 18446744073709551615
                         }
                       }
                     },
@@ -188,8 +208,8 @@
                       },
                       "val": {
                         "i128": {
-                          "hi": 0,
-                          "lo": 300
+                          "hi": 9223372036854775807,
+                          "lo": 18446744073709551615
                         }
                       }
                     }
@@ -239,18 +259,6 @@
                         },
                         "val": {
                           "bool": false
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "LiquiditySource"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                         }
                       }
                     ]
