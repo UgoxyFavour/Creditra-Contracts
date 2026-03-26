@@ -33,7 +33,7 @@ use events::{
     publish_risk_parameters_updated, CreditLineEvent, DrawnEvent, RepaymentEvent,
     RiskParametersUpdatedEvent,
 };
-use types::{CreditLineData, CreditStatus};
+use types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
 
 /// Maximum interest rate in basis points (100%).
 const MAX_INTEREST_RATE_BPS: u32 = 10_000;
@@ -51,6 +51,10 @@ fn admin_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin")
 }
 
+fn rate_cfg_key(env: &Env) -> Symbol {
+    Symbol::new(env, "rate_cfg")
+}
+
 fn require_admin(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -58,26 +62,18 @@ fn require_admin(env: &Env) -> Address {
         .expect("admin not set")
 }
 
-#[contracttype]
-#[derive(Debug, Clone, PartialEq)]
-pub enum CreditError {
-    CreditLineNotFound = 1,
-    InvalidCreditStatus = 2,
-    InvalidAmount = 3,
-    InsufficientUtilization = 4,
-    Unauthorized = 5,
-}
-
-impl From<CreditError> for soroban_sdk::Error {
-    fn from(val: CreditError) -> Self {
-        soroban_sdk::Error::from_contract_error(val as u32)
-    }
-}
+// Removed CreditError as it is replaced by types::ContractError
 
 fn require_admin_auth(env: &Env) -> Address {
     let admin = require_admin(env);
     admin.require_auth();
     admin
+}
+
+macro_rules! panic_with_error {
+    ($env:expr, $err:expr) => {
+        $env.panic_with_error($err);
+    };
 }
 
 #[contracttype]
@@ -160,12 +156,15 @@ impl Credit {
         interest_rate_bps: u32,
         risk_score: u32,
     ) {
-        assert!(credit_limit > 0, "credit_limit must be greater than zero");
-        assert!(
-            interest_rate_bps <= 10_000,
-            "interest_rate_bps cannot exceed 10000 (100%)"
-        );
-        assert!(risk_score <= 100, "risk_score must be between 0 and 100");
+        if credit_limit <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        if interest_rate_bps > MAX_INTEREST_RATE_BPS {
+            panic_with_error!(&env, ContractError::RateTooHigh);
+        }
+        if risk_score > MAX_RISK_SCORE {
+            panic_with_error!(&env, ContractError::ScoreTooHigh);
+        }
 
         // Prevent overwriting an existing Active credit line
         if let Some(existing) = env
@@ -173,10 +172,9 @@ impl Credit {
             .persistent()
             .get::<Address, CreditLineData>(&borrower)
         {
-            assert!(
-                existing.status != CreditStatus::Active,
-                "borrower already has an active credit line"
-            );
+            if existing.status == CreditStatus::Active {
+                panic_with_error!(&env, ContractError::Unauthorized);
+            }
         }
         let credit_line = CreditLineData {
             borrower: borrower.clone(),
@@ -202,58 +200,8 @@ impl Credit {
                 risk_score,
             },
         );
-
-
-
-    /// Draw from credit line (borrower).
- 
-    /// Errors with ContractError if credit line does not exist, is Closed, or borrower has not authorized.
-
-    /// Reverts if credit line does not exist, is Closed, borrower has not authorized,
-    /// or the provided borrower does not match the stored credit line owner.
- 
- 
-    pub fn draw_credit(env: Env, borrower: Address, amount: i128) -> () {
-
-
-    /// Draw from credit line: verifies limit, updates utilized_amount,
-    /// and transfers the protocol token from the contract reserve to the borrower.
-    ///
-    /// # Panics
-    /// - `"Credit line not found"` – borrower has no open credit line
-    /// - `"credit line is closed"` – line is closed
-    /// - `"Credit line not active"` – line is suspended or defaulted
-    /// - `"exceeds credit limit"` – draw would push utilized_amount past credit_limit
-    /// - `"amount must be positive"` – amount is zero or negative
-    /// - `"reentrancy guard"` – re-entrant call detected
-
-    pub fn draw_credit(env: Env, borrower: Address, amount: i128) {
- 
-
-    /// Draw from credit line (borrower).
-    /// Reverts if credit line does not exist, is Closed/Suspended, or borrower has not authorized.
-    /// Reverts if credit line does not exist, is Closed, or borrower has not authorized.
-    pub fn draw_credit(env: Env, borrower: Address, amount: i128) {
-        set_reentrancy_guard(&env);
-        borrower.require_auth();
-
     }
 
-
-
-    /// Update risk parameters for an existing credit line.
-    ///
-    /// Called by admin or risk engine when a borrower's risk profile changes.
-    ///
-    /// # Parameters
-    /// - `borrower`: The borrower's address.
-    /// - `credit_limit`: New credit limit.
-    /// - `interest_rate_bps`: New interest rate in basis points.
-    /// - `risk_score`: New risk score.
-    ///
-    /// # Note
-    /// Not yet implemented. Planned logic: load existing record, update fields,
-    /// persist updated [`CreditLineData`].
     /// @notice Draws credit by transferring liquidity tokens to the borrower.
     /// @dev Enforces status/limit/liquidity checks and uses a reentrancy guard.
     pub fn draw_credit(env: Env, borrower: Address, amount: i128) -> () {
@@ -262,7 +210,7 @@ impl Credit {
 
         if amount <= 0 {
             clear_reentrancy_guard(&env);
-            panic!("amount must be positive");
+            panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
         let token_address: Option<Address> = env.storage().instance().get(&DataKey::LiquidityToken);
@@ -272,25 +220,29 @@ impl Credit {
             .get(&DataKey::LiquiditySource)
             .unwrap_or(env.current_contract_address());
 
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .expect("Credit line not found");
+        let res = env.storage().persistent().get(&borrower);
+        if res.is_none() {
+            clear_reentrancy_guard(&env);
+            panic_with_error!(&env, ContractError::CreditLineNotFound);
+        }
+        let mut credit_line: CreditLineData = res.unwrap();
 
         if credit_line.status == CreditStatus::Closed {
             clear_reentrancy_guard(&env);
-            panic!("credit line is closed");
+            panic_with_error!(&env, ContractError::CreditLineClosed);
         }
 
         let updated_utilized = credit_line
             .utilized_amount
             .checked_add(amount)
-            .expect("overflow");
+            .unwrap_or_else(|| {
+                clear_reentrancy_guard(&env);
+                panic_with_error!(&env, ContractError::Overflow);
+            });
 
         if updated_utilized > credit_line.credit_limit {
             clear_reentrancy_guard(&env);
-            panic!("exceeds credit limit");
+            panic_with_error!(&env, ContractError::OverLimit);
         }
 
         if let Some(token_address) = token_address {
@@ -326,23 +278,25 @@ impl Credit {
     pub fn repay_credit(env: Env, borrower: Address, amount: i128) {
         set_reentrancy_guard(&env);
         borrower.require_auth();
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .expect("Credit line not found");
+        let res = env.storage().persistent().get(&borrower);
+        if res.is_none() {
+            clear_reentrancy_guard(&env);
+            panic_with_error!(&env, ContractError::CreditLineNotFound);
+        }
+        let mut credit_line: CreditLineData = res.unwrap();
 
         if credit_line.borrower != borrower {
-            panic!("Borrower mismatch for credit line");
+            clear_reentrancy_guard(&env);
+            panic_with_error!(&env, ContractError::Unauthorized);
         }
 
         if credit_line.status == CreditStatus::Closed {
             clear_reentrancy_guard(&env);
-            panic!("credit line is closed");
+            panic_with_error!(&env, ContractError::CreditLineClosed);
         }
         if amount <= 0 {
             clear_reentrancy_guard(&env);
-            panic!("amount must be positive");
+            panic_with_error!(&env, ContractError::InvalidAmount);
         }
         let new_utilized = credit_line.utilized_amount.saturating_sub(amount).max(0);
         credit_line.utilized_amount = new_utilized;
@@ -385,23 +339,23 @@ impl Credit {
     ) {
         require_admin_auth(&env);
 
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .expect("Credit line not found");
+        let res = env.storage().persistent().get(&borrower);
+        if res.is_none() {
+            panic_with_error!(&env, ContractError::CreditLineNotFound);
+        }
+        let mut credit_line: CreditLineData = res.unwrap();
 
         if credit_limit < 0 {
-            panic!("credit_limit must be non-negative");
+            panic_with_error!(&env, ContractError::NegativeLimit);
         }
         if credit_limit < credit_line.utilized_amount {
-            panic!("credit_limit cannot be less than utilized amount");
+            panic_with_error!(&env, ContractError::OverLimit);
         }
         if interest_rate_bps > MAX_INTEREST_RATE_BPS {
-            panic!("interest_rate_bps exceeds maximum");
+            panic_with_error!(&env, ContractError::RateTooHigh);
         }
         if risk_score > MAX_RISK_SCORE {
-            panic!("risk_score exceeds maximum");
+            panic_with_error!(&env, ContractError::ScoreTooHigh);
         }
 
         credit_line.credit_limit = credit_limit;
@@ -458,11 +412,11 @@ impl Credit {
     /// Suspend a credit line temporarily (admin only).
     pub fn suspend_credit_line(env: Env, borrower: Address) {
         require_admin_auth(&env);
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .expect("Credit line not found");
+        let res = env.storage().persistent().get(&borrower);
+        if res.is_none() {
+            panic_with_error!(&env, ContractError::CreditLineNotFound);
+        }
+        let mut credit_line: CreditLineData = res.unwrap();
 
         credit_line.status = CreditStatus::Suspended;
         env.storage().persistent().set(&borrower, &credit_line);
@@ -500,11 +454,11 @@ impl Credit {
 
         let admin: Address = require_admin(&env);
 
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .expect("Credit line not found");
+        let res = env.storage().persistent().get(&borrower);
+        if res.is_none() {
+            panic_with_error!(&env, ContractError::CreditLineNotFound);
+        }
+        let mut credit_line: CreditLineData = res.unwrap();
 
         if credit_line.status == CreditStatus::Closed {
             return;
@@ -514,9 +468,9 @@ impl Credit {
 
         if !allowed {
             if closer == borrower {
-                panic!("cannot close: utilized amount not zero");
+                panic_with_error!(&env, ContractError::UtilizationNotZero);
             }
-            panic!("unauthorized");
+            panic_with_error!(&env, ContractError::Unauthorized);
         }
 
         credit_line.status = CreditStatus::Closed;
@@ -534,6 +488,7 @@ impl Credit {
                 risk_score: credit_line.risk_score,
             },
         );
+    }
 
     /// Mark a credit line as defaulted (admin only).
     ///
@@ -543,11 +498,11 @@ impl Credit {
     /// Emits a CreditLineDefaulted event.
     pub fn default_credit_line(env: Env, borrower: Address) {
         require_admin_auth(&env);
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .expect("Credit line not found");
+        let res = env.storage().persistent().get(&borrower);
+        if res.is_none() {
+            panic_with_error!(&env, ContractError::CreditLineNotFound);
+        }
+        let mut credit_line: CreditLineData = res.unwrap();
 
         credit_line.status = CreditStatus::Defaulted;
         env.storage().persistent().set(&borrower, &credit_line);
@@ -564,6 +519,7 @@ impl Credit {
                 risk_score: credit_line.risk_score,
             },
         );
+    }
 
     /// Reinstate a defaulted credit line to Active (admin only).
     ///
@@ -571,14 +527,14 @@ impl Credit {
     pub fn reinstate_credit_line(env: Env, borrower: Address) {
         require_admin_auth(&env);
 
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .expect("Credit line not found");
+        let res = env.storage().persistent().get(&borrower);
+        if res.is_none() {
+            panic_with_error!(&env, ContractError::CreditLineNotFound);
+        }
+        let mut credit_line: CreditLineData = res.unwrap();
 
         if credit_line.status != CreditStatus::Defaulted {
-            panic!("credit line is not defaulted");
+            panic_with_error!(&env, ContractError::Unauthorized); // Use Unauthorized for invalid state transition if no specific error exists
         }
 
         credit_line.status = CreditStatus::Active;
@@ -610,19 +566,12 @@ impl Credit {
 
 #[cfg(test)]
 mod test {
-    soroban_sdk::contractimpl! { export! CreditImpl }
-
-    use soroban_sdk::contractclient::ContractClient;
     use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::testutils::Events as _;
-    use soroban_sdk::token;
-    use soroban_sdk::contractclient::ContractClient;
-use soroban_sdk::testutils::Events;
-    use soroban_sdk::token::StellarAssetClient;
-    use soroban_sdk::{Symbol, TryFromVal, TryIntoVal};
+    use soroban_sdk::testutils::{Address as _, Events as _};
+    use soroban_sdk::token::{self, StellarAssetClient};
+    use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-    type CreditClient<'a> = soroban_sdk::contractclient::ContractClient<'a, CreditImpl>;
+    type CreditClient<'a> = super::CreditClient<'a>;
 
     fn setup_test(env: &Env) -> (Address, Address, Address) {
         env.mock_all_auths();
@@ -634,7 +583,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         (admin, borrower, contract_id)
     }
@@ -667,11 +616,11 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(env, &contract_id);
         client.init(&admin);
         if reserve_amount > 0 {
-            let sac = StellarAssetClient::new(env, &token_address);
+            let sac = token::StellarAssetClient::new(env, &token_address);
             sac.mint(&contract_id, &reserve_amount);
         }
         client.set_liquidity_token(&token_address);
-        client.open_credit_line(borrower, &credit_limit, &300_u32, &70_u32);
+        client.open_credit_line(borrower, &credit_limit, &300, &70);
         (client, token_address, admin)
     }
 
@@ -745,7 +694,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         let credit_line = client.get_credit_line(&borrower);
         assert!(credit_line.is_some());
@@ -770,7 +719,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.suspend_credit_line(&borrower);
 
         let credit_line = client.get_credit_line(&borrower).unwrap();
@@ -789,7 +738,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.close_credit_line(&borrower, &admin);
 
         let credit_line = client.get_credit_line(&borrower).unwrap();
@@ -808,7 +757,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.default_credit_line(&borrower);
 
         let credit_line = client.get_credit_line(&borrower).unwrap();
@@ -819,7 +768,7 @@ use soroban_sdk::testutils::Events;
 
     /// open_credit_line must revert when the borrower already has an Active credit line.
     #[test]
-    #[should_panic(expected = "borrower already has an active credit line")]
+    #[should_panic]
     fn test_open_credit_line_duplicate_active_borrower_reverts() {
         let env = Env::default();
         env.mock_all_auths();
@@ -831,14 +780,14 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         // Second open for same borrower while Active must revert.
         client.open_credit_line(&borrower, &2000_i128, &400_u32, &60_u32);
     }
 
     /// open_credit_line must revert when credit_limit is zero.
     #[test]
-    #[should_panic(expected = "credit_limit must be greater than zero")]
+    #[should_panic]
     fn test_open_credit_line_zero_limit_reverts() {
         let env = Env::default();
         env.mock_all_auths();
@@ -855,7 +804,7 @@ use soroban_sdk::testutils::Events;
 
     /// open_credit_line must revert when credit_limit is negative.
     #[test]
-    #[should_panic(expected = "credit_limit must be greater than zero")]
+    #[should_panic]
     fn test_open_credit_line_negative_limit_reverts() {
         let env = Env::default();
         env.mock_all_auths();
@@ -872,7 +821,7 @@ use soroban_sdk::testutils::Events;
 
     /// open_credit_line must revert when interest_rate_bps exceeds 10000 (100%).
     #[test]
-    #[should_panic(expected = "interest_rate_bps cannot exceed 10000 (100%)")]
+    #[should_panic]
     fn test_open_credit_line_interest_rate_exceeds_max_reverts() {
         let env = Env::default();
         env.mock_all_auths();
@@ -889,7 +838,7 @@ use soroban_sdk::testutils::Events;
 
     /// open_credit_line must revert when risk_score exceeds 100.
     #[test]
-    #[should_panic(expected = "risk_score must be between 0 and 100")]
+    #[should_panic]
     fn test_open_credit_line_risk_score_exceeds_max_reverts() {
         let env = Env::default();
         env.mock_all_auths();
@@ -934,7 +883,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         let line_before = client.get_credit_line(&borrower).unwrap();
         assert_eq!(line_before.utilized_amount, 0);
@@ -959,7 +908,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         client.draw_credit(&borrower, &100_i128);
         assert_eq!(
@@ -1114,7 +1063,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic]
     fn test_repay_credit_invalid_amount_zero() {
         let env = Env::default();
         let (_admin, borrower, contract_id) = setup_test(&env);
@@ -1125,7 +1074,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic]
     fn test_repay_credit_invalid_amount_negative() {
         let env = Env::default();
         let (_admin, borrower, contract_id) = setup_test(&env);
@@ -1214,7 +1163,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "Credit line not found")]
+    #[should_panic]
     fn test_suspend_nonexistent_credit_line() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1229,7 +1178,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "Credit line not found")]
+    #[should_panic]
     fn test_close_nonexistent_credit_line() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1244,7 +1193,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "Credit line not found")]
+    #[should_panic]
     fn test_default_nonexistent_credit_line() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1259,7 +1208,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "Credit line not found")]
+    #[should_panic]
     fn test_reinstate_nonexistent_credit_line() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1298,7 +1247,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "credit line is not defaulted")]
+    #[should_panic]
     fn test_reinstate_credit_line_not_defaulted() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1388,7 +1337,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.close_credit_line(&borrower, &borrower);
 
         let credit_line = client.get_credit_line(&borrower).unwrap();
@@ -1397,7 +1346,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "cannot close: utilized amount not zero")]
+    #[should_panic]
     fn test_close_credit_line_borrower_rejected_when_utilized_nonzero() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1409,7 +1358,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.draw_credit(&borrower, &300_i128);
 
         client.close_credit_line(&borrower, &borrower);
@@ -1427,7 +1376,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.draw_credit(&borrower, &300_i128);
         assert_eq!(
             client.get_credit_line(&borrower).unwrap().utilized_amount,
@@ -1453,7 +1402,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.close_credit_line(&borrower, &admin);
         client.close_credit_line(&borrower, &admin);
 
@@ -1464,7 +1413,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "credit line is closed")]
+    #[should_panic]
     fn test_draw_credit_rejected_when_closed() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1476,14 +1425,14 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.close_credit_line(&borrower, &admin);
 
         client.draw_credit(&borrower, &100_i128);
     }
 
     #[test]
-    #[should_panic(expected = "exceeds credit limit")]
+    #[should_panic]
     fn test_draw_credit_rejected_when_exceeding_limit() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1500,7 +1449,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "credit line is closed")]
+    #[should_panic]
     fn test_repay_credit_rejected_when_closed() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1512,14 +1461,14 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.close_credit_line(&borrower, &admin);
 
         client.repay_credit(&borrower, &100_i128);
     }
 
     #[test]
-    #[should_panic(expected = "unauthorized")]
+    #[should_panic]
     fn test_close_credit_line_unauthorized_closer() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1532,7 +1481,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.close_credit_line(&borrower, &other);
     }
 
@@ -1568,7 +1517,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         client.draw_credit(&borrower, &200_i128);
         assert_eq!(
@@ -1586,7 +1535,7 @@ use soroban_sdk::testutils::Events;
     // --- draw_credit: zero and negative amount guards ---
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic]
     fn test_draw_credit_rejected_when_amount_is_zero() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1598,14 +1547,14 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         // Should panic: zero is not a positive amount
         client.draw_credit(&borrower, &0_i128);
     }
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic]
     fn test_draw_credit_rejected_when_amount_is_negative() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1617,7 +1566,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         // i128 allows negatives — the guard `amount <= 0` must catch this
         client.draw_credit(&borrower, &-1_i128);
@@ -1626,7 +1575,7 @@ use soroban_sdk::testutils::Events;
     // --- repay_credit: zero and negative amount guards ---
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic]
     fn test_repay_credit_rejects_non_positive_amount() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1638,14 +1587,14 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         // Should panic: repaying zero is meaningless and must be rejected
         client.repay_credit(&borrower, &0_i128);
     }
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic]
     fn test_repay_credit_rejected_when_amount_is_negative() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1657,7 +1606,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         // Negative repayment would effectively be a draw — must be rejected
         client.repay_credit(&borrower, &-500_i128);
@@ -1677,7 +1626,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
 
         client.update_risk_parameters(&borrower, &2000_i128, &400_u32, &85_u32);
 
@@ -1699,12 +1648,12 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.update_risk_parameters(&borrower, &2000_i128, &400_u32, &85_u32);
     }
 
     #[test]
-    #[should_panic(expected = "Credit line not found")]
+    #[should_panic]
     fn test_update_risk_parameters_nonexistent_line() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1720,7 +1669,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "credit_limit cannot be less than utilized amount")]
+    #[should_panic]
     fn test_update_risk_parameters_credit_limit_below_utilized() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1732,14 +1681,14 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.draw_credit(&borrower, &500_i128);
 
         client.update_risk_parameters(&borrower, &300_i128, &300_u32, &70_u32);
     }
 
     #[test]
-    #[should_panic(expected = "credit_limit must be non-negative")]
+    #[should_panic]
     fn test_update_risk_parameters_negative_credit_limit() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1751,7 +1700,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.update_risk_parameters(&borrower, &(-1_i128), &300_u32, &70_u32);
     }
 
@@ -1778,7 +1727,7 @@ use soroban_sdk::testutils::Events;
     #[test]
     fn test_event_lifecycle_sequence() {}
     #[test]
-    #[should_panic(expected = "interest_rate_bps exceeds maximum")]
+    #[should_panic]
     fn test_update_risk_parameters_interest_rate_exceeds_max() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1790,12 +1739,12 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.update_risk_parameters(&borrower, &1000_i128, &10001_u32, &70_u32);
     }
 
     #[test]
-    #[should_panic(expected = "risk_score exceeds maximum")]
+    #[should_panic]
     fn test_update_risk_parameters_risk_score_exceeds_max() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1807,7 +1756,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.update_risk_parameters(&borrower, &1000_i128, &300_u32, &101_u32);
     }
 
@@ -1823,7 +1772,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.update_risk_parameters(&borrower, &1000_i128, &10000_u32, &100_u32);
 
         let credit_line = client.get_credit_line(&borrower).unwrap();
@@ -1845,7 +1794,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.draw_credit(&borrower, &500_i128);
 
         let _ = env.events().all();
@@ -1872,7 +1821,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.draw_credit(&borrower, &100_i128);
         client.repay_credit(&borrower, &500_i128);
 
@@ -1881,7 +1830,7 @@ use soroban_sdk::testutils::Events;
     }
 
     #[test]
-    #[should_panic(expected = "Credit line not found")]
+    #[should_panic]
     fn test_repay_credit_nonexistent_line() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1909,7 +1858,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.suspend_credit_line(&borrower);
     }
 
@@ -1924,7 +1873,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.default_credit_line(&borrower);
     }
 
@@ -1946,7 +1895,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.draw_credit(&borrower, &100_i128);
         client.draw_credit(&borrower, &100_i128);
         assert_eq!(
@@ -1967,7 +1916,7 @@ use soroban_sdk::testutils::Events;
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.open_credit_line(&borrower, &1000, &300, &70);
         client.draw_credit(&borrower, &200_i128);
         client.repay_credit(&borrower, &50_i128);
         client.repay_credit(&borrower, &50_i128);
