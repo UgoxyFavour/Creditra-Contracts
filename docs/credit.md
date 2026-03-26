@@ -164,6 +164,16 @@ Emits: `RiskParametersUpdatedEvent` with borrower, new credit limit, new rate, n
   so the first rate change is never blocked by the time window.
 - The delta check uses `abs_diff` which is symmetric and overflow-safe.
 
+#### Ledger timestamp trust assumptions
+- The cooldown window relies on `env.ledger().timestamp()` from the Soroban host.
+- Production deployments therefore trust the network-provided ledger timestamp to be monotonic enough for coarse cooldown enforcement.
+- This mechanism is suitable for protocol-level spacing of administrative rate changes, not for sub-second precision or wall-clock guarantees.
+- Test coverage should explicitly exercise:
+  - first update with `last_rate_update_ts == 0`
+  - exactly-at-boundary acceptance
+  - just-before-boundary rejection
+  - `rate_change_min_interval == 0` disabling the timing gate entirely
+
 ### `suspend_credit_line(env, borrower)`
 Suspends an active credit line. Called by admin.
 
