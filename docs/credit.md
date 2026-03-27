@@ -203,13 +203,35 @@ Sets the global rate-change limits. Admin-only.
 
 ---
 
-### `get_rate_change_limits(env) -> RateChangeConfig`
-Returns the current `RateChangeConfig`. Panics if none is set.
+### `get_rate_change_limits(env) -> Option<RateChangeConfig>`
+Returns the current `RateChangeConfig`, or `None` when limits have not been configured.
 
 ---
 
 ### `get_credit_line(env, borrower) -> Option<CreditLineData>`
 Returns the credit line data for a borrower, or `None` if not found. View function — does not modify state.
+
+---
+
+## Overflow Policy
+
+Arithmetic paths that affect credit limit and utilization use checked math.
+
+- `draw_credit`: utilization update uses `checked_add`; arithmetic overflow reverts with `ContractError::Overflow` (`12`).
+- `repay_credit`: applied repayment is capped to current utilization, then utilization update uses `checked_sub`; arithmetic overflow reverts with `ContractError::Overflow` (`12`).
+- `update_risk_parameters`: limit/risk bounds are validated before state updates; rate delta uses `abs_diff` for overflow-safe unsigned distance checks.
+
+### Large-number test coverage
+
+The contract test suite includes explicit large-value coverage:
+
+- `test_draw_credit_near_i128_max_succeeds_without_overflow`
+- `test_draw_credit_overflow_reverts_with_defined_error`
+- `test_draw_credit_large_values_exceed_limit_reverts_with_defined_error`
+- `test_repay_credit_large_amount_caps_at_zero_without_underflow`
+- `test_update_risk_parameters_rejects_limit_below_utilized_near_i128_max`
+
+These tests validate behavior near `i128::MAX` and confirm overflow handling remains deterministic.
 
 ---
 
