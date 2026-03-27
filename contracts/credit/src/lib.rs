@@ -207,8 +207,6 @@ impl Credit {
         );
     }
 
-
-
     pub fn draw_credit(env: Env, borrower: Address, amount: i128) {
         set_reentrancy_guard(&env);
         borrower.require_auth();
@@ -488,7 +486,6 @@ impl Credit {
         );
     }
 
-
     /// Mark a credit line as defaulted (admin only).
     ///
     /// Call when the line is past due or when an oracle/off-chain signal indicates default.
@@ -519,7 +516,6 @@ impl Credit {
             },
         );
     }
-
 
     /// Reinstate a defaulted credit line to Active (admin only).
     ///
@@ -567,8 +563,8 @@ mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::testutils::Events as _;
-    use soroban_sdk::token;
     use soroban_sdk::testutils::Events;
+    use soroban_sdk::token;
     use soroban_sdk::token::StellarAssetClient;
     use soroban_sdk::Symbol;
 
