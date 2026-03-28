@@ -92,7 +92,7 @@ fn property_preservation_events_rs_unchanged() {
 fn property_preservation_compilation_succeeds() {
     // Run cargo build for the creditra-credit package
     let output = Command::new("cargo")
-        .args(&["build", "-p", "creditra-credit"])
+        .args(["build", "-p", "creditra-credit"])
         .output()
         .expect("Failed to execute cargo build");
 
@@ -123,7 +123,7 @@ fn property_preservation_compilation_succeeds() {
 fn property_preservation_all_tests_pass() {
     // Run cargo test for the creditra-credit package
     let output = Command::new("cargo")
-        .args(&["test", "-p", "creditra-credit"])
+        .args(["test", "-p", "creditra-credit"])
         .output()
         .expect("Failed to execute cargo test");
 
