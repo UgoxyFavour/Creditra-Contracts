@@ -22,9 +22,16 @@ use std::process::Command;
 /// Helper function to resolve file paths relative to workspace root
 fn resolve_path(relative_path: &str) -> PathBuf {
     let workspace_root = std::env::var("CARGO_MANIFEST_DIR")
-        .map(|dir| Path::new(&dir).parent().unwrap().parent().unwrap().to_path_buf())
+        .map(|dir| {
+            Path::new(&dir)
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf()
+        })
         .unwrap_or_else(|_| std::env::current_dir().unwrap());
-    
+
     workspace_root.join(relative_path)
 }
 

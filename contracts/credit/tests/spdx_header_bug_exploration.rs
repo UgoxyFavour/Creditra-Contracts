@@ -60,11 +60,18 @@ fn property_bug_condition_missing_spdx_headers() {
 fn read_first_line(path: &Path) -> String {
     // Try to find the file from the workspace root
     let workspace_root = std::env::var("CARGO_MANIFEST_DIR")
-        .map(|dir| Path::new(&dir).parent().unwrap().parent().unwrap().to_path_buf())
+        .map(|dir| {
+            Path::new(&dir)
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf()
+        })
         .unwrap_or_else(|_| std::env::current_dir().unwrap());
-    
+
     let full_path = workspace_root.join(path);
-    
+
     let content = fs::read_to_string(&full_path)
         .unwrap_or_else(|e| panic!("Failed to read file {:?}: {}", full_path, e));
 
