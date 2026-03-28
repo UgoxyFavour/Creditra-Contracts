@@ -183,6 +183,16 @@ impl Credit {
     /// @notice Draws credit by transferring liquidity tokens to the borrower.
     /// @dev Enforces status/limit/liquidity checks and uses a reentrancy guard.
     /// Reverts if status is not Active (e.g. Suspended, Defaulted, or Closed).
+    /// 
+    /// # Reentrancy Protection
+    /// This function uses a reentrancy guard to prevent re-entrant calls during
+    /// token transfers. If a token contract were to call back into this contract
+    /// during transfer, the guard would revert the transaction.
+    /// 
+    /// # Security Notes
+    /// - Soroban token transfers (e.g. Stellar Asset Contract) do not invoke callbacks
+    /// - This guard is defense-in-depth for future token integrations
+    /// - Guard is cleared on all success and failure paths
     pub fn draw_credit(env: Env, borrower: Address, amount: i128) -> () {
         set_reentrancy_guard(&env);
         borrower.require_auth();
@@ -257,6 +267,16 @@ impl Credit {
     /// Repay credit (borrower).
     /// Reverts if credit line does not exist, is Closed, or borrower has not authorized.
     /// Reduces utilized_amount by amount (capped at 0). Emits RepaymentEvent.
+    /// 
+    /// # Reentrancy Protection
+    /// This function uses a reentrancy guard to prevent re-entrant calls during
+    /// token transfers. If a token contract were to call back into this contract
+    /// during transfer, the guard would revert the transaction.
+    /// 
+    /// # Security Notes
+    /// - Soroban token transfers (e.g. Stellar Asset Contract) do not invoke callbacks
+    /// - This guard is defense-in-depth for future token integrations
+    /// - Guard is cleared on all success and failure paths
     pub fn repay_credit(env: Env, borrower: Address, amount: i128) {
         set_reentrancy_guard(&env);
         borrower.require_auth();
@@ -1328,6 +1348,51 @@ mod test {
     // We cannot simulate a token callback in unit tests without a mock contract.
     // These tests verify the guard is cleared on the happy path so that sequential
     // calls succeed, proving no guard leak occurs on successful execution.
+
+    #[test]
+    #[should_panic(expected = "reentrancy guard")]
+    fn test_reentrancy_guard_prevents_reentrant_draw() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let borrower = Address::generate(&env);
+
+        let contract_id = env.register(Credit, ());
+        let client = CreditClient::new(&env, &contract_id);
+
+        client.init(&admin);
+        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+
+        // Simulate reentrant call by manually setting the guard and trying to call
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&reentrancy_key(&env), &true);
+        });
+        client.draw_credit(&borrower, &100_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "reentrancy guard")]
+    fn test_reentrancy_guard_prevents_reentrant_repay() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let borrower = Address::generate(&env);
+
+        let contract_id = env.register(Credit, ());
+        let client = CreditClient::new(&env, &contract_id);
+
+        client.init(&admin);
+        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
+        client.draw_credit(&borrower, &200_i128);
+
+        // Simulate reentrant call by manually setting the guard and trying to call
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&reentrancy_key(&env), &true);
+        });
+        client.repay_credit(&borrower, &50_i128);
+    }
 
     #[test]
     fn test_reentrancy_guard_cleared_after_draw() {
