@@ -45,8 +45,54 @@ Stored in instance storage under the `"rate_cfg"` key. Optional — when absent,
 | Defaulted | Active | Admin calls `reinstate_credit_line`. |
 | Defaulted | Suspended | Admin calls `suspend_credit_line`. |
 | Defaulted | Closed | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line`. |
+| Closed | Active | Backend calls `open_credit_line` with new parameters (reopening). |
+| Suspended | Active | Backend calls `open_credit_line` with new parameters (reopening). |
+| Defaulted | Active | Backend calls `open_credit_line` with new parameters (reopening). |
+
+**Note on Reopening**: When `open_credit_line` is called for a borrower with a Closed, Suspended, or Defaulted credit line, the existing record is completely replaced with new parameters. This is distinct from `reinstate_credit_line`, which only changes status from Defaulted to Active without modifying other parameters.
 
 When status is **Defaulted**: `draw_credit` is disabled; `repay_credit` is allowed.
+
+### Duplicate Open Policy
+
+The `open_credit_line` function enforces different policies based on the existing credit line status:
+
+#### Active Credit Lines
+
+Attempting to open a second credit line for a borrower with an Active credit line will fail with:
+```
+Error: "borrower already has an active credit line"
+```
+
+This prevents accidental overwrites of active credit lines and helps backend systems detect synchronization errors.
+
+#### Non-Active Credit Lines (Closed, Suspended, Defaulted)
+
+Opening a credit line for a borrower with a Closed, Suspended, or Defaulted credit line will succeed and completely replace the existing record. This enables:
+
+1. **Closed Lines**: Borrowers can receive new credit lines after their previous lines were closed
+2. **Suspended Lines**: Backend can reset credit terms without manual status transitions
+3. **Defaulted Lines**: Borrowers who have resolved defaults can receive new credit lines
+
+#### Field Reset Behavior
+
+When reopening a non-Active credit line, the following fields are explicitly reset:
+
+| Field | Reset Value | Rationale |
+|-------|-------------|-----------|
+| `utilized_amount` | 0 | New credit line starts with no utilization |
+| `last_rate_update_ts` | 0 | Rate change history does not carry over |
+| `status` | Active | All reopened lines become Active |
+
+All other fields (credit_limit, interest_rate_bps, risk_score) are set to the new values provided in the function call.
+
+#### Backend Integration Considerations
+
+Backend systems should:
+- Check existing credit line status before calling `open_credit_line`
+- Use `open_credit_line` for reopening non-Active lines (simpler than close + open)
+- Use `reinstate_credit_line` when only status change is needed (preserves parameters)
+- Handle "borrower already has an active credit line" errors as synchronization issues
 
 ### `CreditLineEvent`
 Emitted on every lifecycle state change.
@@ -82,6 +128,29 @@ Opens a new credit line for a borrower. Called by the backend or risk engine.
 | `credit_limit` | `i128` | Maximum drawable amount |
 | `interest_rate_bps` | `u32` | Interest rate in basis points |
 | `risk_score` | `u32` | Risk score from the risk engine |
+
+#### Duplicate Open Policy
+
+The behavior when calling `open_credit_line` for a borrower with an existing credit line depends on the current status:
+
+| Existing Status | Behavior | Result |
+|----------------|----------|--------|
+| None (new borrower) | Creates new credit line | Success, status = Active |
+| Active | Rejects with error | Panics: "borrower already has an active credit line" |
+| Closed | Replaces existing credit line | Success, status = Active, utilized_amount = 0, last_rate_update_ts = 0 |
+| Suspended | Replaces existing credit line | Success, status = Active, utilized_amount = 0, last_rate_update_ts = 0 |
+| Defaulted | Replaces existing credit line | Success, status = Active, utilized_amount = 0, last_rate_update_ts = 0 |
+
+**Reopening Behavior**: When reopening a Closed, Suspended, or Defaulted credit line:
+- All parameters (credit_limit, interest_rate_bps, risk_score) are replaced with new values
+- `utilized_amount` is reset to 0 (regardless of previous value)
+- `last_rate_update_ts` is reset to 0 (regardless of previous value)
+- `status` is set to Active
+- An ("credit", "opened") event is emitted with the new parameters
+
+**Use Case**: This allows backend systems to reopen credit lines for borrowers who have resolved previous issues (e.g., paid off defaulted debt, completed suspension period, or simply want a new credit line after closing the previous one).
+
+**Error Handling**: Input validation occurs before checking existing credit lines, so invalid parameters will be rejected even when reopening non-Active credit lines.
 
 Emits: `("credit", "opened")` event.
 
@@ -248,7 +317,7 @@ The `Credit` contract uses standard `u32` discriminants for standardized error h
 
 | Topic | Event Type Symbol | Emitted By | Description |
 |---|---|---|---|
-| `("credit", "opened")` | `opened` | `open_credit_line` | New credit line opened |
+| `("credit", "opened")` | `opened` | `open_credit_line` | New credit line opened or existing non-Active credit line reopened |
 | `("credit", "repay")` | `repay` | `repay_credit` | Repayment (borrower, amount, new utilized, timestamp) |
 | `("credit", "suspend")` | `suspend` | `suspend_credit_line` | Credit line suspended |
 | `("credit", "closed")` | `closed` | `close_credit_line` | Credit line closed |
