@@ -583,26 +583,31 @@ impl Credit {
 
 #[cfg(test)]
 mod test {
-        /// Helper to set up a contract, open a credit line, and return (client, token, admin)
-        fn setup_contract_with_credit_line<'a>(env: &'a Env, borrower: &'a Address, credit_limit: i128, utilized_amount: i128) -> (CreditClient<'a>, Address, Address) {
-            env.mock_all_auths();
-            let admin = Address::generate(env);
-            let contract_id = env.register(Credit, ());
-            let client = CreditClient::new(env, &contract_id);
-            client.init(&admin);
-            client.open_credit_line(borrower, &credit_limit, &300_u32, &70_u32);
-            if utilized_amount > 0 {
-                client.draw_credit(borrower, &utilized_amount);
-            }
-            (client, contract_id, admin)
+    /// Helper to set up a contract, open a credit line, and return (client, token, admin)
+    fn setup_contract_with_credit_line<'a>(
+        env: &'a Env,
+        borrower: &'a Address,
+        credit_limit: i128,
+        utilized_amount: i128,
+    ) -> (CreditClient<'a>, Address, Address) {
+        env.mock_all_auths();
+        let admin = Address::generate(env);
+        let contract_id = env.register(Credit, ());
+        let client = CreditClient::new(env, &contract_id);
+        client.init(&admin);
+        client.open_credit_line(borrower, &credit_limit, &300_u32, &70_u32);
+        if utilized_amount > 0 {
+            client.draw_credit(borrower, &utilized_amount);
         }
+        (client, contract_id, admin)
+    }
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::testutils::Events as _;
-    use soroban_sdk::token;
-    use soroban_sdk::Symbol;
     use soroban_sdk::testutils::Events;
+    use soroban_sdk::token;
     use soroban_sdk::token::StellarAssetClient;
+    use soroban_sdk::Symbol;
 
     fn setup_test(env: &Env) -> (Address, Address, Address) {
         env.mock_all_auths();
