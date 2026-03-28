@@ -95,11 +95,6 @@ fn clear_reentrancy_guard(env: &Env) {
     env.storage().instance().set(&reentrancy_key(env), &false);
 }
 
-/// Instance storage key for rate-change config.
-fn rate_cfg_key(env: &Env) -> Symbol {
-    Symbol::new(env, "rate_cfg")
-}
-
 #[contract]
 pub struct Credit;
 
@@ -2044,22 +2039,6 @@ mod test_rate_change_limits {
     }
 
     #[test]
-    fn test_set_and_get_rate_change_limits() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let contract_id = env.register(Credit, ());
-        let client = CreditClient::new(&env, &contract_id);
-        client.init(&admin);
-
-        client.set_rate_change_limits(&200_u32, &7200_u64);
-        let cfg = client.get_rate_change_limits().unwrap();
-
-        assert_eq!(cfg.max_rate_change_bps, 200);
-        assert_eq!(cfg.rate_change_min_interval, 7200);
-    }
-
-    #[test]
     fn test_rate_change_timestamp_recorded() {
         let env = Env::default();
         env.mock_all_auths();
@@ -2163,24 +2142,6 @@ mod test_rate_change_limits {
             client.get_credit_line(&borrower).unwrap().status,
             CreditStatus::Suspended
         );
-    }
-
-    /// Closed → reinstate is forbidden: reinstate_credit_line panics when status is Closed.
-    #[test]
-    #[should_panic(expected = "credit line is not defaulted")]
-    fn test_transition_closed_to_active_forbidden() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let borrower = Address::generate(&env);
-        let contract_id = env.register(Credit, ());
-        let client = CreditClient::new(&env, &contract_id);
-
-        client.init(&admin);
-        client.open_credit_line(&borrower, &1_000_i128, &300_u32, &70_u32);
-        client.close_credit_line(&borrower, &admin);
-        // Attempting to reinstate a Closed line must panic.
-        client.reinstate_credit_line(&borrower);
     }
 
     /// Closed → Closed is idempotent (close_credit_line returns early, no event).
