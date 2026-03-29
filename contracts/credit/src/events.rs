@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Event types and topic constants for the Credit contract.
 //! Stable event schemas for indexing and analytics.
 

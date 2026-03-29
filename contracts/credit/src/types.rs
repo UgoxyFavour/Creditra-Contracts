@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Core data types for the Credit contract.
 
 use soroban_sdk::{contracttype, Address};

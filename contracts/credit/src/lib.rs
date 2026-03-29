@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #![no_std]
 #![allow(clippy::unused_unit)]
 
@@ -29,6 +31,11 @@ const MAX_INTEREST_RATE_BPS: u32 = 10_000;
 /// Maximum risk score (0–100 scale).
 const MAX_RISK_SCORE: u32 = 100;
 
+/// Instance storage key for rate change configuration.
+fn rate_cfg_key(env: &Env) -> Symbol {
+    Symbol::new(env, "rate_cfg")
+}
+
 /// Instance storage key for reentrancy guard.
 fn reentrancy_key(env: &Env) -> Symbol {
     Symbol::new(env, "reentrancy")
@@ -37,11 +44,6 @@ fn reentrancy_key(env: &Env) -> Symbol {
 /// Instance storage key for admin.
 fn admin_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin")
-}
-
-/// Instance storage key for rate-change limit configuration.
-fn rate_cfg_key(env: &Env) -> Symbol {
-    Symbol::new(env, "rate_cfg")
 }
 
 fn require_admin(env: &Env) -> Address {
