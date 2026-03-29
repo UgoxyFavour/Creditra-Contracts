@@ -10,7 +10,7 @@
 //! would revert.
 
 mod events;
-mod types;
+pub mod types;
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
