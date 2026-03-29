@@ -116,6 +116,10 @@ Current result:
 
 This satisfies the 95% minimum coverage target.
 
+## Security Documentation
+
+- Threat model and trust assumptions: [`docs/threat-model.md`](docs/threat-model.md)
+
 ### Deploy (with Soroban CLI)
 
 Once the Soroban CLI and a network are configured:
