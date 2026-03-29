@@ -88,6 +88,9 @@ mod test_helpers {
             CreditStatus::Closed => {
                 client.close_credit_line(&borrower, &admin);
             }
+            CreditStatus::Restricted => {
+                // Already restricted status; leave as-is
+            }
         }
 
         (
