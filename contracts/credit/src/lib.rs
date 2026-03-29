@@ -3,6 +3,52 @@
 
 //! Creditra credit contract: credit lines, draw/repay, risk parameters.
 //!
+//! # Storage Audit (issue #127)
+//!
+//! ## Instance storage (shared contract-wide state, TTL tied to contract instance)
+//!
+//! | Key | Type | Written by | Purpose |
+//! |-----|------|------------|---------|
+//! | `Symbol("admin")` | `Address` | `init` | Contract admin. Instance is correct: there is exactly one admin per contract deployment. |
+//! | `DataKey::LiquidityToken` | `Address` | `set_liquidity_token` | Token contract for reserve. Instance is correct: global config. |
+//! | `DataKey::LiquiditySource` | `Address` | `init`, `set_liquidity_source` | Reserve address. Instance is correct: global config. |
+//! | `Symbol("reentrancy")` | `bool` | `set_reentrancy_guard`, `clear_reentrancy_guard` | Defense-in-depth guard. Instance is correct: transient flag cleared every call. |
+//! | `Symbol("rate_cfg")` | `RateChangeConfig` | `set_rate_change_limits` | Rate-change governance. Instance is correct: global config. |
+//!
+//! ## Persistent storage (per-borrower records, independent TTL per entry)
+//!
+//! | Key | Type | Written by | Purpose |
+//! |-----|------|------------|---------|
+//! | `Address` (borrower) | `CreditLineData` | `open_credit_line`, `draw_credit`, `repay_credit`, `update_risk_parameters`, status transitions | Per-borrower credit line. Persistent is correct: must survive beyond a single transaction and is independent per borrower. |
+//!
+//! ## Temporary storage
+//!
+//! Not currently used. Future candidate: the reentrancy flag could move to
+//! temporary storage since it is only meaningful within a single invocation,
+//! but instance storage works correctly today because it is cleared on every
+//! code path.
+//!
+//! ## TTL implications
+//!
+//! - **Instance keys** share the contract instance TTL. If the instance is
+//!   archived, all instance keys (admin, config, reentrancy) are lost.
+//!   Production deployments should call `env.storage().instance().extend_ttl()`
+//!   periodically (e.g. in `init` or a dedicated `bump` endpoint).
+//! - **Persistent keys** (borrower → CreditLineData) have independent TTLs.
+//!   Long-lived credit lines should be bumped via `persistent().extend_ttl()`
+//!   on access or via a keeper. If a borrower's entry is archived, their
+//!   credit line data is lost.
+//!
+//! # Status transitions
+//!
+//! | From    | To        | Trigger |
+//! |---------|-----------|---------|
+//! | Active  | Suspended | `suspend_credit_line` |
+//! | Active  | Defaulted | `default_credit_line` |
+//! | Suspended | Defaulted | `default_credit_line` |
+//! | Defaulted | Active   | `reinstate_credit_line` |
+//! | Any (non-Closed) | Closed | `close_credit_line` |
+//!
 //! # Reentrancy
 //! Soroban token transfers (e.g. Stellar Asset Contract) do not invoke callbacks back into
 //! the caller. This contract uses a reentrancy guard on draw_credit and repay_credit as a

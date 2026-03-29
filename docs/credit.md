@@ -400,5 +400,62 @@ All sensitive functions enforce authorization via `require_auth()`.
 ## Running Tests
 
 ```bash
-cargo test
+cargo test -p creditra-credit
 ```
+
+---
+
+## Appendix: Storage Key Audit
+
+### Instance Storage
+
+Keys that share the contract instance TTL. If the instance is archived, all
+these keys are lost. Production deployments should call
+`env.storage().instance().extend_ttl()` periodically.
+
+| Key | Rust type | Value type | Written by | Notes |
+|-----|-----------|------------|------------|-------|
+| `Symbol("admin")` | `Symbol` | `Address` | `init` | Contract admin. Exactly one per deployment. |
+| `DataKey::LiquidityToken` | `DataKey` | `Address` | `set_liquidity_token` | Token contract for reserve/draw transfers. |
+| `DataKey::LiquiditySource` | `DataKey` | `Address` | `init`, `set_liquidity_source` | Reserve address. Defaults to contract address. |
+| `Symbol("reentrancy")` | `Symbol` | `bool` | `set_reentrancy_guard`, `clear_reentrancy_guard` | Defense-in-depth flag. Cleared on every code path. |
+| `Symbol("rate_cfg")` | `Symbol` | `RateChangeConfig` | `set_rate_change_limits` | Admin-configurable rate-change governance. |
+
+**Why instance?** These are global singleton configuration values. There is
+exactly one admin, one liquidity token, one liquidity source, and one rate
+config per contract deployment. Instance storage is correct.
+
+### Persistent Storage
+
+Per-borrower records with independent TTL per entry.
+
+| Key | Rust type | Value type | Written by | Notes |
+|-----|-----------|------------|------------|-------|
+| Borrower `Address` | `Address` | `CreditLineData` | `open_credit_line`, `draw_credit`, `repay_credit`, `update_risk_parameters`, status transitions | Long-lived borrower data. Independent TTL. |
+
+**Why persistent?** Each borrower's credit line must survive beyond a single
+transaction and has an independent lifecycle. Persistent is correct. If a
+borrower's entry TTL expires (archival), their credit line data is lost —
+production deployments should bump TTL on access or via a keeper.
+
+### Temporary Storage
+
+Not currently used. Future candidate: the reentrancy guard could move to
+temporary storage since it only needs to survive within a single invocation.
+Instance storage works correctly today because it is always cleared.
+
+### Audit Findings
+
+1. **Admin** — correctly on instance. Single value, global.
+2. **LiquidityToken / LiquiditySource** — correctly on instance. Global config.
+3. **Reentrancy flag** — correctly on instance (cleared every call). Could
+   optionally move to temporary storage for cleaner semantics.
+4. **Rate config** — correctly on instance. Global governance parameter.
+5. **Borrower records** — correctly on persistent. Per-entity, long-lived.
+6. **No borrower data on instance** — verified. No volatile/instance keys are
+   used for per-borrower data.
+7. **TTL management** — not yet implemented. Recommend adding
+   `extend_ttl()` calls on instance (in `init` or a dedicated `bump` endpoint)
+   and on persistent (on credit line access) before production deployment.
+
+You can also run all workspace tests from the repository root with `cargo test`.
