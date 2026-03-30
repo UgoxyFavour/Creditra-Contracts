@@ -88,6 +88,11 @@ mod test_helpers {
             CreditStatus::Closed => {
                 client.close_credit_line(&borrower, &admin);
             }
+            CreditStatus::Restricted => {
+                panic!(
+                    "Restricted credit lines are not valid inputs for duplicate-open policy setup"
+                )
+            }
         }
 
         (
