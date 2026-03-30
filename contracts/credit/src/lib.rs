@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #![no_std]
 #![allow(clippy::unused_unit)]
 
@@ -655,24 +656,6 @@ impl Credit {
 
 #[cfg(test)]
 mod test {
-    /// Helper to set up a contract, open a credit line, and return (client, token, admin)
-    fn setup_contract_with_credit_line<'a>(
-        env: &'a Env,
-        borrower: &'a Address,
-        credit_limit: i128,
-        utilized_amount: i128,
-    ) -> (CreditClient<'a>, Address, Address) {
-        env.mock_all_auths();
-        let admin = Address::generate(env);
-        let contract_id = env.register(Credit, ());
-        let client = CreditClient::new(env, &contract_id);
-        client.init(&admin);
-        client.open_credit_line(borrower, &credit_limit, &300_u32, &70_u32);
-        if utilized_amount > 0 {
-            client.draw_credit(borrower, &utilized_amount);
-        }
-        (client, contract_id, admin)
-    }
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::testutils::Events as _;
@@ -709,35 +692,6 @@ mod test {
 
     fn approve(env: &Env, token: &Address, from: &Address, spender: &Address, amount: i128) {
         token::Client::new(env, token).approve(from, spender, &amount, &1_000_u32);
-    }
-
-    fn setup_test(env: &Env) -> (Address, Address, Address) {
-        env.mock_all_auths();
-
-        let admin = Address::generate(env);
-        let borrower = Address::generate(env);
-
-        let contract_id = env.register(Credit, ());
-        let client = CreditClient::new(env, &contract_id);
-
-        client.init(&admin);
-        client.open_credit_line(&borrower, &1000_i128, &300_u32, &70_u32);
-
-        (admin, borrower, contract_id)
-    }
-
-    fn call_contract<F>(env: &Env, contract_id: &Address, f: F)
-    where
-        F: FnOnce(),
-    {
-        env.as_contract(contract_id, f);
-    }
-
-    fn get_credit_data(env: &Env, contract_id: &Address, borrower: &Address) -> CreditLineData {
-        let client = CreditClient::new(env, contract_id);
-        client
-            .get_credit_line(borrower)
-            .expect("Credit line not found")
     }
 
     #[test]
@@ -1226,7 +1180,7 @@ mod test {
 #[cfg(test)]
 mod test_smoke_coverage {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger};
+    use soroban_sdk::testutils::{Address as _};
     use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 
     #[test]
@@ -1781,7 +1735,7 @@ mod test_coverage_gaps {
         let token_admin = Address::generate(&env);
 
         let contract_id = env.register(Credit, ());
-        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+        let _token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
         let client = CreditClient::new(&env, &contract_id);
 
         client.init(&admin);
@@ -2162,23 +2116,11 @@ mod test_e2e_lifecycle_happy {
         // ── Step 4: close ────────────────────────────────────────────────────
         client.close_credit_line(&borrower, &borrower);
 
-        let line = client.get_credit_line(&borrower).unwrap();
-        assert_eq!(line.status, CreditStatus::Closed);
-
         // ── Event assertion: last credit event is "closed" ───────────────────
+        // Must check events before any further contract calls; each top-level
+        // invocation resets the event log (invocation metering behavior).
         let events = env.events().all();
-        let last_credit = events
-            .iter()
-            .filter(|(_c, topics, _d)| {
-                topics
-                    .get(0)
-                    .and_then(|v| Symbol::try_from_val(&env, &v).ok())
-                    .map(|s: Symbol| s == symbol_short!("credit"))
-                    .unwrap_or(false)
-            })
-            .last()
-            .expect("no credit event found");
-        let (_c, topics, data) = last_credit;
+        let (_c, topics, data) = events.last().expect("no credit event found");
         assert_eq!(
             Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
             symbol_short!("closed")
@@ -2186,5 +2128,8 @@ mod test_e2e_lifecycle_happy {
         let event_data: CreditLineEvent = data.try_into_val(&env).unwrap();
         assert_eq!(event_data.status, CreditStatus::Closed);
         assert_eq!(event_data.borrower, borrower);
+
+        let line = client.get_credit_line(&borrower).unwrap();
+        assert_eq!(line.status, CreditStatus::Closed);
     }
 }
