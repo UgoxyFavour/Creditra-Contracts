@@ -81,21 +81,3 @@ pub fn update_risk_parameters(
         },
     );
 }
-
-/// Set rate-change limits (admin only).
-///
-/// Configures the maximum allowed interest-rate change per call and the
-/// minimum time interval between consecutive rate changes.
-pub fn set_rate_change_limits(env: Env, max_rate_change_bps: u32, rate_change_min_interval: u64) {
-    require_admin_auth(&env);
-    let cfg = RateChangeConfig {
-        max_rate_change_bps,
-        rate_change_min_interval,
-    };
-    env.storage().instance().set(&rate_cfg_key(&env), &cfg);
-}
-
-/// Get the current rate-change limit configuration (view function).
-pub fn get_rate_change_limits(env: Env) -> Option<RateChangeConfig> {
-    env.storage().instance().get(&rate_cfg_key(&env))
-}
