@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
+#![no_std]
 
-//! Core data types for the Credit contract.
+//! Core data types for the Creditra contract.
 
 use soroban_sdk::{contracttype, Address};
 
@@ -57,6 +58,7 @@ pub enum ContractError {
 
 /// Stored credit line data for a borrower.
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreditLineData {
     /// Address of the borrower.
     pub borrower: Address,
