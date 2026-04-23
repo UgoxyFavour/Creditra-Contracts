@@ -10,7 +10,6 @@
 //! defense-in-depth measure; if a token or future integration ever called back, the guard
 //! would revert.
 
-mod auth;
 mod config;
 mod events;
 mod lifecycle;
@@ -19,23 +18,24 @@ mod risk;
 mod storage;
 pub mod types;
 mod auth;
-mod storage;
 mod borrow;
-mod config;
-mod lifecycle;
-mod risk;
-mod query;
+
+#[cfg(test)]
+mod risk_formula_tests;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+    contract, contractimpl, symbol_short, token, Address, Env, Symbol,
 };
 
 use events::{
-    publish_credit_line_event, publish_drawn_event, publish_repayment_event,
-    publish_risk_parameters_updated, CreditLineEvent, DrawnEvent, RepaymentEvent,
-    RiskParametersUpdatedEvent,
+    publish_credit_line_event,
+    publish_drawn_event,
+    publish_repayment_event,
+    CreditLineEvent,
+    DrawnEvent,
+    RepaymentEvent,
 };
-use types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
+// removed duplicate import of types; rely on earlier crate::types import
 
 /// Maximum interest rate in basis points (100%).
 const MAX_INTEREST_RATE_BPS: u32 = 10_000;
@@ -53,12 +53,11 @@ fn admin_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin")
 }
 
-pub mod types;
-
-use crate::events::{publish_drawn_event, publish_repayment_event, DrawnEvent, RepaymentEvent};
+// duplicate events import removed
 use crate::storage::{clear_reentrancy_guard, set_reentrancy_guard, DataKey};
-use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig, RateFormulaConfig};
+use crate::auth::require_admin_auth; // added missing import
+use crate::storage::rate_cfg_key; // added missing import
 
 #[contract]
 pub struct Credit;
@@ -457,13 +456,42 @@ impl Credit {
         lifecycle::default_credit_line(env, borrower)
     }
 
-    pub fn reinstate_credit_line(env: Env, borrower: Address) {
-        lifecycle::reinstate_credit_line(env, borrower)
-    }
+// duplicate wrapper removed
 
     /// Get credit line data for a borrower (view function).
     pub fn get_credit_line(env: Env, borrower: Address) -> Option<CreditLineData> {
         env.storage().persistent().get(&borrower)
+    }
+
+    /// Set the risk-score-based rate formula configuration (admin only).
+    ///
+    /// Once set, `update_risk_parameters` will compute `interest_rate_bps`
+    /// from the borrower's `risk_score` using a piecewise-linear formula.
+    ///
+    /// # Formula
+    /// ```text
+    /// raw_rate = base_rate_bps + (risk_score * slope_bps_per_score)
+    /// effective_rate = clamp(raw_rate, min_rate_bps, min(max_rate_bps, 10_000))
+    /// ```
+    pub fn set_rate_formula_config(
+        env: Env,
+        base_rate_bps: u32,
+        slope_bps_per_score: u32,
+        min_rate_bps: u32,
+        max_rate_bps: u32,
+    ) {
+        risk::set_rate_formula_config(env, base_rate_bps, slope_bps_per_score, min_rate_bps, max_rate_bps)
+    }
+
+    /// Get the current rate formula configuration (view function).
+    /// Returns `None` if no formula is configured (manual rate mode).
+    pub fn get_rate_formula_config(env: Env) -> Option<RateFormulaConfig> {
+        risk::get_rate_formula_config(env)
+    }
+
+    /// Remove the rate formula configuration, reverting to manual rate mode (admin only).
+    pub fn clear_rate_formula_config(env: Env) {
+        risk::clear_rate_formula_config(env)
     }
 
     /// Reinstate a defaulted credit line to Active (admin only).
@@ -1156,7 +1184,7 @@ mod test {
         assert_eq!(line.status, CreditStatus::Active);
         assert_utilization_invariants(&line);
     }
-}
+
 
 #[cfg(test)]
 mod test_smoke_coverage {

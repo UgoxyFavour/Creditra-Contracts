@@ -182,3 +182,27 @@ pub fn publish_interest_accrued_event(env: &Env, event: InterestAccruedEvent) {
     env.events()
         .publish((symbol_short!("credit"), symbol_short!("accrue")), event);
 }
+
+/// Event emitted when the risk-score rate formula config is set or cleared.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateFormulaConfigEvent {
+    /// Base interest rate in bps at risk_score = 0.
+    pub base_rate_bps: u32,
+    /// Bps added per unit of risk_score.
+    pub slope_bps_per_score: u32,
+    /// Minimum computed rate (floor).
+    pub min_rate_bps: u32,
+    /// Maximum computed rate (ceiling).
+    pub max_rate_bps: u32,
+    /// Whether the formula is enabled (true) or cleared (false).
+    pub enabled: bool,
+}
+
+/// Publish a rate formula config changed event.
+pub fn publish_rate_formula_config_event(env: &Env, event: RateFormulaConfigEvent) {
+    env.events().publish(
+        (symbol_short!("credit"), symbol_short!("rate_cfg")),
+        event,
+    );
+}
