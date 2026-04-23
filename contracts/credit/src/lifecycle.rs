@@ -3,59 +3,6 @@ use crate::events::{publish_credit_line_event, CreditLineEvent};
 use crate::types::{CreditLineData, CreditStatus};
 use soroban_sdk::{symbol_short, Address, Env};
 
-pub fn open_credit_line(
-    env: Env,
-    borrower: Address,
-    credit_limit: i128,
-    interest_rate_bps: u32,
-    risk_score: u32,
-) {
-    assert!(credit_limit > 0, "credit_limit must be greater than zero");
-    assert!(
-        interest_rate_bps <= 10_000,
-        "interest_rate_bps cannot exceed 10000 (100%)"
-    );
-    assert!(risk_score <= 100, "risk_score must be between 0 and 100");
-
-    // Prevent overwriting an existing Active credit line
-    if let Some(existing) = env
-        .storage()
-        .persistent()
-        .get::<Address, CreditLineData>(&borrower)
-    {
-        assert!(
-            existing.status != CreditStatus::Active,
-            "borrower already has an active credit line"
-        );
-    }
-    let credit_line = CreditLineData {
-        borrower: borrower.clone(),
-        credit_limit,
-        utilized_amount: 0,
-        interest_rate_bps,
-        risk_score,
-        status: CreditStatus::Active,
-        last_rate_update_ts: 0,
-        accrued_interest: 0,
-        last_accrual_ts: 0,
-    };
-
-    env.storage().persistent().set(&borrower, &credit_line);
-
-    publish_credit_line_event(
-        &env,
-        (symbol_short!("credit"), symbol_short!("opened")),
-        CreditLineEvent {
-            event_type: symbol_short!("opened"),
-            borrower: borrower.clone(),
-            status: CreditStatus::Active,
-            credit_limit,
-            interest_rate_bps,
-            risk_score,
-        },
-    );
-}
-
 /// Suspend a credit line temporarily.
 ///
 /// Called by admin to freeze a borrower's credit line without closing it.

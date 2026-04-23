@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 //! Event types and topic constants for the Credit contract.
 //! Stable event schemas for indexing and analytics.

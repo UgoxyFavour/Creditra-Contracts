@@ -11,17 +11,14 @@
 //! would revert.
 
 mod auth;
-mod borrow;
-mod config;
 mod events;
 mod freeze;
 mod lifecycle;
-mod query;
 mod risk;
 mod storage;
 pub mod types;
 
-use crate::auth::{require_admin, require_admin_auth};
+use crate::auth::require_admin_auth;
 use crate::events::{
     publish_credit_line_event, publish_drawn_event, publish_repayment_event, CreditLineEvent,
     DrawnEvent, RepaymentEvent,
@@ -500,9 +497,6 @@ mod test {
     ) -> (CreditClient<'a>, Address, Address, Address) {
         let admin = Address::generate(env);
         let contract_id = env.register(Credit, ());
-        let token_admin = Address::generate(env);
-        let token_id = env.register_stellar_asset_contract_v2(token_admin);
-        let token_address = token_id.address();
         let client = CreditClient::new(env, &contract_id);
         client.init(&admin);
         let token_id = env.register_stellar_asset_contract_v2(Address::generate(env));
@@ -1237,7 +1231,7 @@ mod test_smoke_coverage {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
-        let borrower = Address::generate(&env);
+        let _borrower = Address::generate(&env);
         let client = CreditClient::new(&env, &env.register(Credit, ()));
         client.init(&admin);
         client.suspend_credit_line(&Address::generate(&env));
@@ -1276,7 +1270,7 @@ mod test_smoke_coverage {
         env.mock_all_auths();
         let admin = Address::generate(&env);
         let borrower = Address::generate(&env);
-        let borrower_two = Address::generate(&env);
+        let _borrower_two = Address::generate(&env);
         let client = CreditClient::new(&env, &env.register(Credit, ()));
         client.init(&admin);
         client.open_credit_line(&borrower, &1000_i128, &500_u32, &60_u32);
@@ -1444,6 +1438,7 @@ mod test_coverage_gaps {
     use soroban_sdk::token::StellarAssetClient;
     use soroban_sdk::{symbol_short, Symbol, TryFromVal, TryIntoVal};
 
+    #[allow(dead_code)]
     fn setup_contract_with_credit_line<'a>(
         env: &'a Env,
         borrower: &'a Address,
