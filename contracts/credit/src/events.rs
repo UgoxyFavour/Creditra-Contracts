@@ -197,6 +197,8 @@ pub fn publish_interest_accrued_event(env: &Env, event: InterestAccruedEvent) {
 
 /// Publish a draws-frozen toggle event.
 pub fn publish_draws_frozen_event(env: &Env, event: DrawsFrozenEvent) {
-    env.events()
-        .publish((symbol_short!("credit"), Symbol::new(env, "drw_freeze")), event);
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "drw_freeze")),
+        event,
+    );
 }

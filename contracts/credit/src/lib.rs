@@ -11,6 +11,7 @@
 //! would revert.
 
 mod auth;
+mod borrow;
 mod config;
 mod events;
 mod freeze;
@@ -19,14 +20,15 @@ mod query;
 mod risk;
 mod storage;
 pub mod types;
-mod borrow;
 
 use crate::auth::{require_admin, require_admin_auth};
 use crate::events::{
     publish_credit_line_event, publish_drawn_event, publish_repayment_event, CreditLineEvent,
     DrawnEvent, RepaymentEvent,
 };
-use crate::storage::{admin_key, clear_reentrancy_guard, rate_cfg_key, set_reentrancy_guard, DataKey};
+use crate::storage::{
+    admin_key, clear_reentrancy_guard, rate_cfg_key, set_reentrancy_guard, DataKey,
+};
 use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
 
@@ -2413,8 +2415,12 @@ mod test_draw_freeze {
         client.freeze_draws();
         // Fund borrower and approve for repayment
         sac.mint(&borrower, &200_i128);
-        soroban_sdk::token::Client::new(&env, &token_address)
-            .approve(&borrower, &contract_id, &200_i128, &1_000_u32);
+        soroban_sdk::token::Client::new(&env, &token_address).approve(
+            &borrower,
+            &contract_id,
+            &200_i128,
+            &1_000_u32,
+        );
         // Repay should still succeed
         client.repay_credit(&borrower, &200_i128);
         let line = client.get_credit_line(&borrower).unwrap();

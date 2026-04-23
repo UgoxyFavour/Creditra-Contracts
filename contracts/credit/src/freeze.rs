@@ -33,9 +33,7 @@ use soroban_sdk::Env;
 /// Emits [`DrawsFrozenEvent`] with `frozen = true`.
 pub fn freeze_draws(env: Env) {
     let admin = require_admin_auth(&env);
-    env.storage()
-        .instance()
-        .set(&DataKey::DrawsFrozen, &true);
+    env.storage().instance().set(&DataKey::DrawsFrozen, &true);
     publish_draws_frozen_event(
         &env,
         DrawsFrozenEvent {
@@ -55,9 +53,7 @@ pub fn freeze_draws(env: Env) {
 /// Emits [`DrawsFrozenEvent`] with `frozen = false`.
 pub fn unfreeze_draws(env: Env) {
     let admin = require_admin_auth(&env);
-    env.storage()
-        .instance()
-        .set(&DataKey::DrawsFrozen, &false);
+    env.storage().instance().set(&DataKey::DrawsFrozen, &false);
     publish_draws_frozen_event(
         &env,
         DrawsFrozenEvent {
