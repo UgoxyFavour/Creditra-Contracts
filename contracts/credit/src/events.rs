@@ -195,3 +195,24 @@ pub fn publish_interest_accrued_event(env: &Env, event: InterestAccruedEvent) {
     env.events()
         .publish((symbol_short!("credit"), symbol_short!("accrue")), event);
 }
+
+/// Event emitted when a borrower's block status changes.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BorrowerBlockedEvent {
+    /// Address of the borrower.
+    pub borrower: Address,
+    /// New blocked status.
+    pub blocked: bool,
+}
+
+/// Publish a borrower blocked/unblocked event.
+pub fn publish_borrower_blocked_event(env: &Env, event: BorrowerBlockedEvent) {
+    let topic = if event.blocked {
+        symbol_short!("blocked")
+    } else {
+        Symbol::new(env, "unblocked")
+    };
+    env.events()
+        .publish((symbol_short!("credit"), topic), event);
+}

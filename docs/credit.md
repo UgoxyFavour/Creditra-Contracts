@@ -972,6 +972,8 @@ This section documents all contract errors and their exact error codes for consi
 | 11 | `Reentrancy` | Reentrancy detected during cross-contract calls | Reentrancy guard |
 | 12 | `Overflow` | Math overflow occurred during calculation | Arithmetic operations |
 | 13 | `LimitDecreaseRequiresRepayment` | Credit limit decrease requires immediate repayment of excess amount | Limit decrease validation |
+| 14 | `AlreadyInitialized` | Contract has already been initialized; `init` may only be called once | Initialization guard |
+| 15 | `BorrowerBlocked` | Borrower is blocked from drawing credit | Borrower blocklist enforcement |
 
 ### Rate and Score Validation
 
@@ -1002,3 +1004,60 @@ For detailed test implementation, see `boundary_tests.rs` in the source code.
 2. **Handle RateTooHigh/ScoreTooHigh specifically**: These errors indicate input validation failures
 3. **Distinguish between error types**: `RateTooHigh` (8) vs `ScoreTooHigh` (9) for precise validation feedback
 4. **Test boundary conditions**: Include tests for exact bounds and one-past bounds in all integrations
+
+---
+
+## Borrower Blocklist
+
+The borrower blocklist provides an emergency gating mechanism that allows the protocol admin to temporarily prevent specific borrowers from drawing credit without modifying their underlying `CreditStatus` or credit line data. This is useful during investigations, compliance reviews, or when suspicious activity is detected.
+
+### Methods
+
+#### `set_borrower_blocked(env, borrower, blocked)`
+- **Access**: Admin only
+- **Parameters**:
+  - `borrower`: Address to block or unblock
+  - `blocked`: `true` to block, `false` to unblock
+- **Behavior**: Stores the blocked flag in persistent storage keyed by borrower. Emits a `BorrowerBlockedEvent` with topic `("credit", "blocked")` or `("credit", "unblocked")`.
+- **Security**: Requires admin auth. Does not mutate `CreditLineData` or `CreditStatus`.
+
+#### `is_borrower_blocked(env, borrower) -> bool`
+- **Access**: View function (no auth required)
+- **Returns**: `true` if the borrower is currently blocked, `false` otherwise (including if no record exists).
+
+### Enforcement
+
+The blocklist is enforced exclusively in `draw_credit`. If a blocked borrower attempts to draw:
+- The transaction reverts with `ContractError::BorrowerBlocked` (code 15)
+- The reentrancy guard is cleared before reverting
+- Repayments via `repay_credit` remain fully operational regardless of block status
+
+### Operational Use Cases
+
+1. **Investigation Hold**: A borrower's account shows suspicious activity. Admin blocks draws while the investigation proceeds. The borrower's existing utilization and status remain unchanged, and they can still repay.
+2. **Compliance Freeze**: Regulatory requirement to pause new draws for a specific address. Blocking avoids the need to suspend or default the line, preserving the borrower's credit history.
+3. **Temporary Risk Mitigation**: Rapid response to an oracle or off-chain risk signal. The admin can block immediately and unblock once the signal resolves, without going through the `Suspended` -> `Active` state transition.
+
+### State Machine Independence
+
+The blocklist is intentionally decoupled from `CreditStatus`:
+
+| Aspect | Blocklist | `CreditStatus` |
+|---|---|---|
+| Scope | Per-address flag | Per-credit-line enum |
+| Admin action | `set_borrower_blocked` | `suspend_credit_line`, `default_credit_line`, etc. |
+| Affects draws | Yes | Yes (for Suspended, Defaulted, Closed) |
+| Affects repay | No | No (except Closed) |
+| Event topic | `("credit", "blocked")` / `("credit", "unblocked")` | `("credit", "suspend")` / `("credit", "default")` etc. |
+| Persistence | Persistent storage (`DataKey::BlockedBorrower`) | Persistent storage (`CreditLineData`) |
+
+This separation ensures that blocking is a lightweight, reversible operational action that does not interfere with lifecycle transitions or interest accrual logic.
+
+### Testing Requirements
+
+- Block and unblock round-trip
+- Blocked borrower cannot draw
+- Unblocked borrower can draw after being unblocked
+- Repayment remains allowed while blocked
+- Non-admin cannot block or unblock
+- Events emitted with correct topics and payloads

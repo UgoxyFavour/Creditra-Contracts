@@ -181,6 +181,11 @@ impl Credit {
         set_reentrancy_guard(&env);
         borrower.require_auth();
 
+        if is_borrower_blocked(&env, &borrower) {
+            clear_reentrancy_guard(&env);
+            env.panic_with_error(ContractError::BorrowerBlocked);
+        }
+
         if amount <= 0 {
             clear_reentrancy_guard(&env);
             panic!("amount must be positive");
@@ -1593,6 +1598,7 @@ mod test_smoke_coverage {
         let _ = ContractError::Overflow;
         let _ = ContractError::Reentrancy;
         let _ = ContractError::AlreadyInitialized;
+        let _ = ContractError::BorrowerBlocked;
 
         // Trigger a few more error paths
         let admin = Address::generate(&env);
