@@ -9,10 +9,12 @@ pub enum DataKey {
     LiquidityToken,
     /// Address of the liquidity source / reserve that funds draws.
     LiquiditySource,
-    /// Optional per-transaction draw cap (admin-configurable).
+    /// Global emergency switch: when `true`, all `draw_credit` calls revert.
+    /// Does not affect repayments. Distinct from per-line `Suspended` status.
+    DrawsFrozen,
     MaxDrawAmount,
-    /// Persistent flag indicating a borrower is blocked from drawing credit.
-    BlockedBorrower(soroban_sdk::Address),
+    /// Per-borrower block flag; when `true`, draw_credit is rejected.
+    BlockedBorrower(Address),
 }
 
 pub fn admin_key(env: &Env) -> Symbol {
@@ -40,9 +42,9 @@ pub fn rate_formula_key(env: &Env) -> Symbol {
     Symbol::new(env, "rate_form")
 }
 
-/// Instance storage key for the grace period policy configuration.
-pub fn grace_period_key(env: &Env) -> Symbol {
-    Symbol::new(env, "grace_cfg")
+/// Instance storage key for the protocol pause flag.
+pub fn paused_key(env: &Env) -> Symbol {
+    Symbol::new(env, "paused")
 }
 
 /// Assert reentrancy guard is not set; set it for the duration of the call.
@@ -76,8 +78,30 @@ pub fn is_borrower_blocked(env: &Env, borrower: &Address) -> bool {
 }
 
 /// Set or clear the blocked status for a borrower.
+#[allow(dead_code)]
 pub fn set_borrower_blocked(env: &Env, borrower: &Address, blocked: bool) {
     env.storage()
         .persistent()
         .set(&DataKey::BlockedBorrower(borrower.clone()), &blocked);
+}
+
+/// Check whether the protocol is paused.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&paused_key(env))
+        .unwrap_or(false)
+}
+
+/// Set the protocol pause state (admin only, enforced by caller).
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&paused_key(env), &paused);
+}
+
+/// Assert the protocol is not paused. Reverts with ContractError::Paused if paused.
+/// This is the circuit breaker guard injected into all mutating entrypoints except repay_credit.
+pub fn assert_not_paused(env: &Env) {
+    if is_paused(env) {
+        env.panic_with_error(crate::types::ContractError::Paused);
+    }
 }
