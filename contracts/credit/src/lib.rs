@@ -19,6 +19,7 @@ mod config;
 mod events;
 mod freeze;
 mod lifecycle;
+mod query;
 mod risk;
 mod storage;
 pub mod types;
@@ -135,6 +136,9 @@ impl Credit {
     pub fn draw_credit(env: Env, borrower: Address, amount: i128) {
         borrow::draw_credit(env, borrower, amount)
         assert!(credit_limit > 0, "credit_limit must be greater than zero");
+        if interest_rate_bps > MAX_INTEREST_RATE_BPS {
+            env.panic_with_error(ContractError::RateTooHigh);
+        }
         if risk_score > MAX_RISK_SCORE {
             env.panic_with_error(ContractError::ScoreTooHigh);
         }
@@ -151,24 +155,11 @@ impl Credit {
             );
         }
 
-        // Determine the effective interest rate:
-        // - If a rate formula config is stored, compute from risk_score (ignore passed rate).
-        // - Otherwise, use the manually supplied interest_rate_bps.
-        let effective_rate = if let Some(formula_cfg) = risk::get_rate_formula_config(env.clone()) {
-            risk::compute_rate_from_score(&formula_cfg, risk_score)
-        } else {
-            interest_rate_bps
-        };
-
-        if effective_rate > MAX_INTEREST_RATE_BPS {
-            env.panic_with_error(ContractError::RateTooHigh);
-        }
-
         let credit_line = CreditLineData {
             borrower: borrower.clone(),
             credit_limit,
             utilized_amount: 0,
-            interest_rate_bps: effective_rate,
+            interest_rate_bps,
             risk_score,
             status: CreditStatus::Active,
             last_rate_update_ts: 0,
@@ -186,7 +177,7 @@ impl Credit {
                 borrower: borrower.clone(),
                 status: CreditStatus::Active,
                 credit_limit,
-                interest_rate_bps: effective_rate,
+                interest_rate_bps,
                 risk_score,
             },
         );
@@ -212,11 +203,6 @@ impl Credit {
     pub fn draw_credit(env: Env, borrower: Address, amount: i128) -> () {
         set_reentrancy_guard(&env);
         borrower.require_auth();
-
-        if is_borrower_blocked(&env, &borrower) {
-            clear_reentrancy_guard(&env);
-            env.panic_with_error(ContractError::BorrowerBlocked);
-        }
 
         if amount <= 0 {
             clear_reentrancy_guard(&env);
@@ -312,16 +298,6 @@ impl Credit {
         credit_line.utilized_amount = updated_utilized;
         env.storage().persistent().set(&borrower, &credit_line);
         let timestamp = env.ledger().timestamp();
-        publish_interest_accrued_event(
-            &env,
-            InterestAccruedEvent {
-                borrower: borrower.clone(),
-                accrued_amount: 0,
-                total_accrued_interest: credit_line.accrued_interest,
-                new_utilized_amount: credit_line.utilized_amount,
-                timestamp,
-            },
-        );
         publish_drawn_event(
             &env,
             DrawnEvent {
