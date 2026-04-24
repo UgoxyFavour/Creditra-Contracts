@@ -16,8 +16,20 @@ pub struct AuctionState {
     pub amount: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuctionKey {
+    Closed(Symbol),
+}
+
 #[contractimpl]
 impl Auction {
+    pub fn close_auction(env: Env, auction_id: Symbol) {
+        env.storage()
+            .persistent()
+            .set(&AuctionKey::Closed(auction_id), &true);
+    }
+
     /// Place a bid for an auction identified by `auction_id`.
     /// If there's a previous highest bidder, emit a `BID_RFDN` event
     /// before attempting the refund token transfer.
@@ -26,6 +38,15 @@ impl Auction {
 
         if amount <= 0 {
             panic!("amount must be positive");
+        }
+
+        let is_closed = env
+            .storage()
+            .persistent()
+            .get(&AuctionKey::Closed(auction_id.clone()))
+            .unwrap_or(false);
+        if is_closed {
+            panic!("auction is closed");
         }
 
         // Load existing highest bid if any
@@ -40,7 +61,10 @@ impl Auction {
             publish_bid_refunded_event(&env, prev.bidder.clone(), prev.amount);
 
             // Attempt refund token transfer if token address configured in instance storage
-            let token_addr: Option<Address> = env.storage().instance().get(&Symbol::new(&env, "bid_token"));
+            let token_addr: Option<Address> = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "bid_token"));
             if let Some(tkn) = token_addr {
                 let token_client = token::Client::new(&env, &tkn);
                 // Contract is the sender of refund transfers (for tests this will be mocked)
@@ -49,7 +73,10 @@ impl Auction {
         }
 
         // Store new highest bid
-        let new_state = AuctionState { bidder: bidder.clone(), amount };
+        let new_state = AuctionState {
+            bidder: bidder.clone(),
+            amount,
+        };
         env.storage().persistent().set(&auction_id, &new_state);
     }
 }

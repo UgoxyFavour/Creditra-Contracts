@@ -7,6 +7,23 @@ The Auction contract implements two auction flows that coexist in the same contr
 
 Both flows use Soroban auth (`require_auth`) and ledger timestamp checks to enforce access and timing constraints.
 
+## Running Tests Locally
+
+Run all workspace tests:
+
+```bash
+cargo test --workspace
+```
+
+Run only auction invariant/fuzz tests:
+
+```bash
+cargo test --manifest-path gateway-contract/contracts/auction_contract/Cargo.toml fuzz_
+cargo test --manifest-path gateway-contract/contracts/auction_contract/Cargo.toml close_semantics_cannot_be_bypassed
+```
+
+The fuzz tests use fixed seeds and bounded iteration counts to keep CI runtime deterministic.
+
 ## Public Entry Points
 
 ### Function: `create_auction`

@@ -8,6 +8,11 @@ pub struct BidRefundedEvent {
 }
 
 pub fn publish_bid_refunded_event(env: &Env, prev_bidder: Address, amount: i128) {
-    env.events()
-        .publish((symbol_short!("BID_RFDN"), symbol_short!("auction")), BidRefundedEvent { prev_bidder, amount });
+    env.events().publish(
+        (symbol_short!("BID_RFDN"), symbol_short!("auction")),
+        BidRefundedEvent {
+            prev_bidder,
+            amount,
+        },
+    );
 }
