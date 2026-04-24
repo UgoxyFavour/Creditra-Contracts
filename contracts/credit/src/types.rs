@@ -23,6 +23,32 @@ pub enum CreditStatus {
 }
 
 /// Errors that can be returned by the Credit contract.
+///
+/// # Stability guarantee
+/// These discriminants are **permanent**. Never reorder or renumber existing
+/// variants — doing so would break deployed SDK clients. New variants must be
+/// appended at the end with the next available integer.
+///
+/// # Discriminant table (source of truth)
+/// | Code | Variant                        | Description |
+/// |------|--------------------------------|-------------|
+/// | 1    | `Unauthorized`                 | Caller is not authorized |
+/// | 2    | `NotAdmin`                     | Caller lacks admin privileges |
+/// | 3    | `CreditLineNotFound`           | Credit line does not exist |
+/// | 4    | `CreditLineClosed`             | Credit line is permanently closed |
+/// | 5    | `InvalidAmount`                | Amount is zero, negative, or otherwise invalid |
+/// | 6    | `OverLimit`                    | Draw would exceed the credit limit |
+/// | 7    | `NegativeLimit`                | Credit limit cannot be negative |
+/// | 8    | `RateTooHigh`                  | Interest rate exceeds the maximum allowed |
+/// | 9    | `ScoreTooHigh`                 | Risk score exceeds the maximum allowed (100) |
+/// | 10   | `UtilizationNotZero`           | Operation requires zero utilization |
+/// | 11   | `Reentrancy`                   | Reentrancy detected during cross-contract call |
+/// | 12   | `Overflow`                     | Arithmetic overflow during calculation |
+/// | 13   | `LimitDecreaseRequiresRepayment` | Limit decrease below utilized amount |
+/// | 14   | `AlreadyInitialized`           | Contract already initialized |
+/// | 15   | `AdminAcceptTooEarly`          | Admin acceptance attempted before delay elapsed |
+/// | 16   | `BorrowerBlocked`              | Borrower is on the blocked list |
+/// | 17   | `DrawExceedsMaxAmount`         | Draw amount exceeds per-transaction cap |
 #[soroban_sdk::contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
