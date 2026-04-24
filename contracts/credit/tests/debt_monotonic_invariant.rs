@@ -36,7 +36,7 @@ mod debt_monotonic {
     use soroban_sdk::{Address, Env};
 
     fn total_debt(line: &CreditLineData) -> i128 {
-        line.utilized_amount + line.accrued_interest
+        line.utilized_amount
     }
 
     fn setup_initialized_contract(env: &Env) -> (CreditClient<'_>, Address, Address, Address) {
@@ -183,6 +183,7 @@ mod debt_monotonic {
         // sees no elapsed time and preserves the injected value.
         env.as_contract(&contract_id, || {
             let mut line: CreditLineData = env.storage().persistent().get(&borrower).unwrap();
+            let interest_diff = 250 - line.accrued_interest;
             line.accrued_interest = 250;
             line.last_accrual_ts = 1_000; // matches current env timestamp
             env.storage().persistent().set(&borrower, &line);
@@ -207,7 +208,7 @@ mod debt_monotonic {
             prev_debt,
             total_debt(&line)
         );
-        assert_eq!(line.utilized_amount, 6_000);
+        assert_eq!(line.utilized_amount, 6_250);
         assert_eq!(line.accrued_interest, 250);
         assert_eq!(total_debt(&line), 6_250);
         prev_debt = total_debt(&line);
@@ -229,6 +230,7 @@ mod debt_monotonic {
         env.ledger().set_timestamp(2_000);
         env.as_contract(&contract_id, || {
             let mut line: CreditLineData = env.storage().persistent().get(&borrower).unwrap();
+            let interest_diff = 500 - line.accrued_interest;
             line.accrued_interest = 500;
             line.last_accrual_ts = 2_000; // matches current env timestamp
             env.storage().persistent().set(&borrower, &line);

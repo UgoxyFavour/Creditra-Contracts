@@ -333,7 +333,13 @@ pub fn publish_borrower_blocked_event(env: &Env, event: BorrowerBlockedEvent) {
         Symbol::new(env, "unblocked")
     };
     env.events()
-        .publish((symbol_short!("credit"), topic), event);
+        .publish((symbol_short!("credit"), symbol_short!("adm_prop")), event);
+}
+
+/// Publish an admin rotation accepted event.
+pub fn publish_admin_rotation_accepted(env: &Env, event: AdminRotationAcceptedEvent) {
+    env.events()
+        .publish((symbol_short!("credit"), symbol_short!("admin_acc")), event);
 }
 
 /// Event emitted when the rate formula config is set or cleared.

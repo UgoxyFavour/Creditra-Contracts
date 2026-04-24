@@ -135,10 +135,14 @@ Opens a new credit line for a borrower. Called by the backend or risk engine.
 Emits: `("credit", "opened")` event with a `CreditLineEvent` payload.
 
 ### `draw_credit(env, borrower, amount)`
-Draw funds from an **Active** credit line. Caller must be the borrower.
+Draw funds from an **Active** credit line. Only the borrower is authorized to call this function.
 
-- Reverts if line is Closed, Suspended, Defaulted, or does not exist.
-- Reverts if draw would exceed `credit_limit`.
+- Reverts with `ContractError::Unauthorized` (1) if caller is not the borrower.
+- Reverts with `ContractError::CreditLineNotFound` (3) if no line exists.
+- Reverts with `ContractError::CreditLineSuspended` (18), `ContractError::CreditLineDefaulted` (19), or `ContractError::CreditLineClosed` (4) based on status.
+- Reverts with `ContractError::InvalidAmount` (5) if `amount <= 0`.
+- Reverts with `ContractError::Overflow` (12) on arithmetic overflow.
+- Reverts with `ContractError::OverLimit` (6) if draw exceeds `credit_limit`.
 - Transfers tokens from liquidity source → borrower.
 
 Emits: `("credit", "drawn")` event.
