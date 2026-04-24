@@ -67,6 +67,7 @@ Initializes the contract with an admin address. Must be called exactly once.
 
 - Stores `admin` in instance storage under the `"admin"` key.
 - Sets `LiquiditySource` to the contract's own address as a deterministic default.
+- Sets `DataKey::SchemaVersion` to `1` in instance storage.
 - Reverts with `ContractError::AlreadyInitialized` (14) if called a second time, preventing admin takeover via re-initialization.
 
 #### Parameters
@@ -146,6 +147,16 @@ Draw funds from an **Active** credit line. Only the borrower is authorized to ca
 
 Emits: `("credit", "drawn")` event.
 
+### `reverse_draw(env, borrower, amount, original_ts, reason_code)`
+Admin-only bounded reversal for erroneous draws.
+
+- Reversal is allowed only when `ledger_timestamp - original_ts <= 3600` seconds.
+- Reversal is validated against borrower-scoped draw audit data keyed by `(borrower, original_ts)`.
+- Supports partial reversal; total reversed amount cannot exceed the original drawn amount at that timestamp.
+- **Accounting-only behavior**: this call updates debt accounting (`utilized_amount`) and emits an audit event, but does not move tokens from borrower back to reserve.
+
+Emits: `("credit", "draw_rev")` event with `DrawReversedEvent` payload containing borrower, amount, original draw timestamp, reason code, actor, and post-reversal utilization.
+
 ### `repay_credit(env, borrower, amount)`
 Repay outstanding drawn funds.
 
@@ -189,6 +200,22 @@ Configure rate-change limits (admin only).
 
 ### `get_rate_change_limits(env) -> Option<RateChangeConfig>`
 Returns the current rate-change configuration (or `None` if not set).
+
+### `get_schema_version(env) -> Option<u32>`
+Returns the stored storage schema version from instance storage.
+
+- After successful `init`, this returns `Some(1)`.
+- Before initialization, this returns `None`.
+
+### Storage schema versioning and migrations
+
+The credit contract stores an explicit schema marker under `DataKey::SchemaVersion`.
+
+- Current schema version: `1`
+- Existing key/value layouts are unchanged; the version key is additive metadata.
+- For immutable deployments, the version still gives off-chain tooling a deterministic way to detect schema expectations.
+- For future contract deployments, bump the schema version when storage semantics change and document migration requirements in release notes and deployment playbooks.
+
 ### `update_risk_parameters(env, borrower, credit_limit, interest_rate_bps, risk_score)`
 
 Update the risk parameters for an existing credit line. Admin-only.
@@ -291,7 +318,20 @@ Emits: `("credit", "closed")` event.
 ### `default_credit_line(env, borrower)`
 Mark credit line as Defaulted (admin only).
 
-Emits: `("credit", "default")` event.
+Emits:
+- `("credit", "default")` lifecycle event.
+- `("credit", "liq_req")` liquidation request event for auction orchestration.
+
+### `settle_default_liquidation(env, borrower, recovered_amount, settlement_id)`
+Apply auction liquidation proceeds to a defaulted line (admin only).
+
+- Accounting-only operation (no token transfer in this method).
+- Requires `status == Defaulted`.
+- Requires positive `recovered_amount` and `recovered_amount <= utilized_amount`.
+- Enforces one-time settlement per `(borrower, settlement_id)` to prevent replay.
+- If remaining `utilized_amount == 0`, status transitions to `Closed`.
+
+Emits: `("credit", "liq_setl")` event. When fully settled, also emits `("credit", "closed")`.
 
 ### `reinstate_credit_line(env, borrower, target_status)`
 Reinstate a Defaulted credit line to `target_status` (Active or Suspended). Admin only.
@@ -386,11 +426,14 @@ The `Credit` contract uses standard `u32` discriminants for standardized error h
 |----------------------------|------------|-----------------------------|-----------|
 | `("credit", "opened")`     | `opened`   | `open_credit_line`          | New credit line created |
 | `("credit", "drawn")`      | `drawn`    | `draw_credit`               | Funds drawn |
+| `("credit", "draw_rev")`   | `draw_rev` | `reverse_draw`              | Admin accounting reversal for erroneous draw (audit trail with reason code) |
 | `("credit", "repay")`      | `repay`    | `repay_credit`              | Repayment made (includes interest/principal allocation) |
 | `("credit", "accrue")`     | `accrue`   | `apply_pending_accrual`     | Interest capitalized into debt |
 | `("credit", "suspend")`    | `suspend`  | `suspend_credit_line`       | Line suspended |
 | `("credit", "closed")`     | `closed`   | `close_credit_line`         | Line closed |
 | `("credit", "default")`    | `default`  | `default_credit_line`       | Line defaulted |
+| `("credit", "liq_req")`    | `liq_req`  | `default_credit_line`       | Default liquidation requested |
+| `("credit", "liq_setl")`   | `liq_setl` | `settle_default_liquidation`| Auction settlement applied to debt accounting |
 | `("credit", "reinstate")`  | `reinstate`| `reinstate_credit_line`     | Line reinstated |
 | `("credit", "risk_updated")`| `risk_updated` | `update_risk_parameters` | Risk parameters changed |
 | `("credit", "drw_freeze")` | `DrawsFrozenEvent` | `freeze_draws`, `unfreeze_draws` | Global draw freeze toggled |
@@ -408,11 +451,13 @@ like actor/source/timestamp identifiers) while keeping v1 payloads stable. See
 | `init`                   | Deployer (once)       |
 | `open_credit_line`       | Backend / risk engine |
 | `draw_credit`            | Borrower              |
+| `reverse_draw`           | Admin                 |
 | `repay_credit`           | Borrower              |
 | `update_risk_parameters` | Admin / risk engine   |
 | `suspend_credit_line`    | Admin                 |
 | `close_credit_line`      | Admin or borrower     |
 | `default_credit_line`    | Admin                 |
+| `settle_default_liquidation` | Admin             |
 | `reinstate_credit_line`  | Admin                 |
 | `set_liquidity_token`    | Admin                 |
 | `set_liquidity_source`   | Admin                 |
@@ -428,7 +473,9 @@ like actor/source/timestamp identifiers) while keeping v1 payloads stable. See
 ### Related Admin Workflows
 
 - Default lifecycle: `default_credit_line` → optional `suspend_credit_line` containment → `reinstate_credit_line` or `close_credit_line`.
+- Default liquidation lifecycle: `default_credit_line` emits `liq_req` → auction flow executes off-chain/on-chain as configured → admin applies proceeds via `settle_default_liquidation`.
 - Oracle-assisted default design: `docs/default-oracle.md`.
+- Auction hook architecture: `docs/default-liquidation-auction-hook.md`.
 
 ---
 

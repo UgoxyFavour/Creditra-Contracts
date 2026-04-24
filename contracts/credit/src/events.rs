@@ -123,6 +123,30 @@ pub struct DrawnEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when an admin reverses an erroneous draw within the reversal window.
+///
+/// This is an accounting-only operation; no token clawback is attempted.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DrawReversedEvent {
+    /// Address of the borrower whose draw was reversed.
+    pub borrower: Address,
+    /// Amount reversed from outstanding utilization.
+    pub amount: i128,
+    /// Timestamp of the original draw being reversed.
+    pub original_ts: u64,
+    /// Admin-provided reason code for audit trails.
+    pub reason_code: u32,
+    /// New outstanding utilization after reversal.
+    pub new_utilized_amount: i128,
+    /// Ledger timestamp when reversal was executed.
+    pub timestamp: u64,
+    /// Admin that executed the reversal.
+    pub admin: Address,
+    /// Always true for this event to make accounting-only semantics explicit.
+    pub accounting_only: bool,
+}
+
 /// Event emitted when interest is accrued and capitalized.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -175,6 +199,16 @@ pub struct AdminRotationAcceptedEvent {
     pub new_admin: Address,
 }
 
+pub fn publish_admin_rotation_proposed(env: &Env, event: AdminRotationProposedEvent) {
+    env.events()
+        .publish((symbol_short!("admin"), symbol_short!("proposed")), event);
+}
+
+pub fn publish_admin_rotation_accepted(env: &Env, event: AdminRotationAcceptedEvent) {
+    env.events()
+        .publish((symbol_short!("admin"), symbol_short!("accepted")), event);
+}
+
 /// Publish a credit line lifecycle event.
 pub fn publish_credit_line_event(env: &Env, topic: (Symbol, Symbol), event: CreditLineEvent) {
     env.events().publish(topic, event);
@@ -207,11 +241,41 @@ pub fn publish_drawn_event(env: &Env, event: DrawnEvent) {
         .publish((symbol_short!("credit"), symbol_short!("drawn")), event);
 }
 
+/// Publish a draw reversal event.
+pub fn publish_draw_reversed_event(env: &Env, event: DrawReversedEvent) {
+    env.events()
+        .publish((symbol_short!("credit"), symbol_short!("draw_rev")), event);
+}
+
 /// Publish a v2 drawn event.
 #[allow(dead_code)]
 pub fn publish_drawn_event_v2(env: &Env, event: DrawnEventV2) {
     env.events()
         .publish((symbol_short!("credit"), symbol_short!("drawn_v2")), event);
+}
+
+/// Publish an admin rotation proposed event.
+pub fn publish_admin_rotation_proposed(env: &Env, event: AdminRotationProposedEvent) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "admin_prop")),
+        event,
+    );
+}
+
+/// Publish an admin rotation accepted event.
+pub fn publish_admin_rotation_accepted(env: &Env, event: AdminRotationAcceptedEvent) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "admin_acc")),
+        event,
+    );
+}
+
+/// Publish a risk formula configuration event.
+pub fn publish_rate_formula_config_event(env: &Env, event: RateFormulaConfigEvent) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "rate_cfg")),
+        event,
+    );
 }
 
 /// Publish a risk parameters updated event.

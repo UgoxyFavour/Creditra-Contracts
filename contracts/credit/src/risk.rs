@@ -73,6 +73,7 @@ pub fn get_rate_formula_config(env: Env) -> Option<RateFormulaConfig> {
 /// * If credit line does not exist.
 /// * If validation fails (limit < utilization, score > 100, etc.).
 /// * If rate change exceeds configured limits.
+/// * If the protocol is paused.
 pub fn update_risk_parameters(
     env: Env,
     borrower: Address,
@@ -80,6 +81,7 @@ pub fn update_risk_parameters(
     interest_rate_bps: u32,
     risk_score: u32,
 ) {
+    assert_not_paused(&env);
     require_admin_auth(&env);
 
     let mut credit_line: CreditLineData = env

@@ -42,6 +42,11 @@ pub fn rate_formula_key(env: &Env) -> Symbol {
     Symbol::new(env, "rate_form")
 }
 
+/// Instance storage key for the protocol pause flag.
+pub fn paused_key(env: &Env) -> Symbol {
+    Symbol::new(env, "paused")
+}
+
 /// Assert reentrancy guard is not set; set it for the duration of the call.
 ///
 /// Panics with [`ContractError::Reentrancy`] if the guard is already active,
@@ -78,4 +83,25 @@ pub fn set_borrower_blocked(env: &Env, borrower: &Address, blocked: bool) {
     env.storage()
         .persistent()
         .set(&DataKey::BlockedBorrower(borrower.clone()), &blocked);
+}
+
+/// Check whether the protocol is paused.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&paused_key(env))
+        .unwrap_or(false)
+}
+
+/// Set the protocol pause state (admin only, enforced by caller).
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&paused_key(env), &paused);
+}
+
+/// Assert the protocol is not paused. Reverts with ContractError::Paused if paused.
+/// This is the circuit breaker guard injected into all mutating entrypoints except repay_credit.
+pub fn assert_not_paused(env: &Env) {
+    if is_paused(env) {
+        env.panic_with_error(crate::types::ContractError::Paused);
+    }
 }

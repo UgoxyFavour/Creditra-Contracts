@@ -207,3 +207,26 @@ Residual risk:
 Operational recommendation: set `max_draw_amount` to a value reflecting the
 largest legitimate single draw expected during normal protocol operation
 immediately after deployment initialization.
+
+### 8) Admin draw reversal misuse and token-accounting divergence
+
+Threat: An operator uses `reverse_draw` outside intended operational procedure,
+or users incorrectly assume reversal automatically claws tokens back from the
+borrower.
+
+Mitigation:
+- `reverse_draw` is admin-authenticated and time-bounded to a 1-hour window from
+  `original_ts`.
+- Reversal is borrower-bound and draw-bound using stored audit records keyed by
+  `(borrower, original_ts)`.
+- Every reversal emits a dedicated `("credit", "draw_rev")` audit event with
+  reason code, actor, and amount for monitoring and post-incident review.
+- Contract behavior is explicit: reversal is accounting-only and does not call
+  token transfer APIs.
+
+Residual risk:
+- Accounting reversal can reduce outstanding debt while drawn tokens remain with
+  the borrower; this is a conscious emergency-correction tradeoff, not a
+  clawback primitive.
+- Compromised admin key can still misuse reversal controls within the allowed
+  window.
