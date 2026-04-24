@@ -11,6 +11,7 @@
 //! would revert.
 
 mod auth;
+mod borrow;
 mod config;
 mod events;
 mod lifecycle;
@@ -18,24 +19,18 @@ mod query;
 mod risk;
 mod storage;
 pub mod types;
-mod auth;
-mod storage;
-mod borrow;
-mod config;
-mod lifecycle;
-mod risk;
-mod query;
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
-};
-
-use events::{
+use crate::auth::require_admin_auth;
+use crate::events::{
     publish_credit_line_event, publish_drawn_event, publish_repayment_event,
     publish_risk_parameters_updated, CreditLineEvent, DrawnEvent, RepaymentEvent,
     RiskParametersUpdatedEvent,
 };
-use types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
+use crate::storage::{clear_reentrancy_guard, rate_cfg_key, set_reentrancy_guard, DataKey};
+use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+};
 
 /// Maximum interest rate in basis points (100%).
 const MAX_INTEREST_RATE_BPS: u32 = 10_000;
@@ -53,12 +48,28 @@ fn admin_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin")
 }
 
-pub mod types;
+/// Reads the configured reserve balance and performs the draw transfer.
+///
+/// This is compatible with the Stellar Asset Contract interface because it only
+/// relies on the standard `balance` and `transfer` methods exposed by
+/// `soroban_sdk::token::Client`.
+fn transfer_from_liquidity_reserve(
+    env: &Env,
+    token_address: &Address,
+    reserve_address: &Address,
+    borrower: &Address,
+    amount: i128,
+) {
+    let token_client = token::Client::new(env, token_address);
+    let reserve_balance = token_client.balance(reserve_address);
+    if reserve_balance < amount {
+        clear_reentrancy_guard(env);
+        env.panic_with_error(ContractError::InsufficientLiquidity);
+    }
 
-use crate::events::{publish_drawn_event, publish_repayment_event, DrawnEvent, RepaymentEvent};
-use crate::storage::{clear_reentrancy_guard, set_reentrancy_guard, DataKey};
-use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+    token_client.transfer(reserve_address, borrower, &amount);
+}
+
 
 #[contract]
 pub struct Credit;
@@ -164,28 +175,26 @@ impl Credit {
         );
     }
 
-    /// Update risk parameters for an existing credit line.
+    /// Draws credit by transferring liquidity tokens to the borrower.
     ///
-    /// Called by admin or risk engine when a borrower's risk profile changes.
+    /// Enforces the credit line status, available limit, and configured reserve
+    /// liquidity before updating utilization and emitting a draw event.
     ///
-    /// # Parameters
-    /// - `borrower`: The borrower's address.
-    /// - `credit_limit`: New credit limit.
-    /// - `interest_rate_bps`: New interest rate in basis points.
-    /// - `risk_score`: New risk score.
-    ///
-    /// # Note
-    /// Not yet implemented. Planned logic: load existing record, update fields,
-    /// persist updated [`CreditLineData`].
-    /// @notice Draws credit by transferring liquidity tokens to the borrower.
-    /// @dev Enforces status/limit/liquidity checks and uses a reentrancy guard.
+    /// # Errors
+    /// - [`ContractError::InvalidAmount`] when `amount <= 0`.
+    /// - [`ContractError::CreditLineNotFound`] when the borrower has no credit line.
+    /// - [`ContractError::CreditLineClosed`] when the line is closed.
+    /// - [`ContractError::OverLimit`] when `amount` would exceed `credit_limit`.
+    /// - [`ContractError::InsufficientLiquidity`] when the configured liquidity source
+    ///   does not hold enough tokens to fulfill the draw. This revert happens
+    ///   before utilization is updated, so borrower state remains unchanged.
     pub fn draw_credit(env: Env, borrower: Address, amount: i128) -> () {
         set_reentrancy_guard(&env);
         borrower.require_auth();
 
         if amount <= 0 {
             clear_reentrancy_guard(&env);
-            panic!("amount must be positive");
+            env.panic_with_error(ContractError::InvalidAmount);
         }
 
         let token_address: Option<Address> = env.storage().instance().get(&DataKey::LiquidityToken);
@@ -239,18 +248,17 @@ impl Credit {
 
         if updated_utilized > credit_line.credit_limit {
             clear_reentrancy_guard(&env);
-            panic!("exceeds credit limit");
+            env.panic_with_error(ContractError::OverLimit);
         }
 
         if let Some(token_address) = token_address {
-            let token_client = token::Client::new(&env, &token_address);
-            let reserve_balance = token_client.balance(&reserve_address);
-            if reserve_balance < amount {
-                clear_reentrancy_guard(&env);
-                panic!("Insufficient liquidity reserve for requested draw amount");
-            }
-
-            token_client.transfer(&reserve_address, &borrower, &amount);
+            transfer_from_liquidity_reserve(
+                &env,
+                &token_address,
+                &reserve_address,
+                &borrower,
+                amount,
+            );
         }
 
         credit_line.utilized_amount = updated_utilized;
@@ -457,15 +465,6 @@ impl Credit {
         lifecycle::default_credit_line(env, borrower)
     }
 
-    pub fn reinstate_credit_line(env: Env, borrower: Address) {
-        lifecycle::reinstate_credit_line(env, borrower)
-    }
-
-    /// Get credit line data for a borrower (view function).
-    pub fn get_credit_line(env: Env, borrower: Address) -> Option<CreditLineData> {
-        env.storage().persistent().get(&borrower)
-    }
-
     /// Reinstate a defaulted credit line to Active (admin only).
     pub fn reinstate_credit_line(env: Env, borrower: Address) {
         require_admin_auth(&env);
@@ -491,6 +490,11 @@ impl Credit {
                 risk_score: credit_line.risk_score,
             },
         );
+    }
+
+    /// Get credit line data for a borrower (view function).
+    pub fn get_credit_line(env: Env, borrower: Address) -> Option<CreditLineData> {
+        env.storage().persistent().get(&borrower)
     }
 }
 
@@ -1193,7 +1197,7 @@ mod test_smoke_coverage {
 
         client.suspend_credit_line(&borrower);
         client.default_credit_line(&borrower);
-        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
+        client.reinstate_credit_line(&borrower);
 
         sac.mint(&borrower, &100_i128);
         TokenClient::new(&env, &token_address).approve(
@@ -1306,6 +1310,7 @@ mod test_smoke_coverage {
         let _ = ContractError::Overflow;
         let _ = ContractError::Reentrancy;
         let _ = ContractError::AlreadyInitialized;
+        let _ = ContractError::InsufficientLiquidity;
 
         // Trigger a few more error paths
         let admin = Address::generate(&env);
@@ -1585,7 +1590,7 @@ mod test_coverage_gaps {
         let env = Env::default();
         let (client, _admin, borrower) = base_setup(&env);
         // Line is Active, not Defaulted
-        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
+        client.reinstate_credit_line(&borrower);
     }
 
     #[test]
@@ -1595,7 +1600,7 @@ mod test_coverage_gaps {
         let (client, _admin, borrower) = base_setup(&env);
         client.suspend_credit_line(&borrower);
         // Line is Suspended, not Defaulted
-        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
+        client.reinstate_credit_line(&borrower);
     }
 
     // ── open_credit_line: allows reopening after Closed status ───────────────
@@ -1625,7 +1630,7 @@ mod test_coverage_gaps {
         env.mock_all_auths();
         let (client, _admin, borrower) = base_setup(&env);
         client.default_credit_line(&borrower);
-        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
+        client.reinstate_credit_line(&borrower);
         let events = env.events().all();
         let (_contract, topics, data) = events.last().unwrap();
         assert_eq!(
@@ -1654,7 +1659,7 @@ mod test_coverage_gaps {
         client.repay_credit(&borrower, &50_i128);
         client.suspend_credit_line(&borrower);
         client.default_credit_line(&borrower);
-        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
+        client.reinstate_credit_line(&borrower);
         client.close_credit_line(&borrower, &admin);
 
         let events = env.events().all();
@@ -1814,6 +1819,7 @@ mod test_coverage_gaps {
 
         let admin = Address::generate(&env);
         let borrower = Address::generate(&env);
+        let token_admin = Address::generate(&env);
         let contract_id = env.register(Credit, ());
         let client = CreditClient::new(&env, &contract_id);
         client.init(&admin);
@@ -1833,6 +1839,82 @@ mod test_coverage_gaps {
     }
 
     // ── draw_credit: overflow protection ─────────────────────────────────────
+
+    #[test]
+    fn draw_credit_with_exact_reserve_balance_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let borrower = Address::generate(&env);
+        let contract_id = env.register(Credit, ());
+        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+        let client = CreditClient::new(&env, &contract_id);
+        let token_admin_client = StellarAssetClient::new(&env, &token_id.address());
+        let token_client = token::Client::new(&env, &token_id.address());
+
+        client.init(&admin);
+        client.set_liquidity_token(&token_id.address());
+        client.open_credit_line(&borrower, &1_000_i128, &300_u32, &70_u32);
+
+        token_admin_client.mint(&contract_id, &250_i128);
+        client.draw_credit(&borrower, &250_i128);
+
+        assert_eq!(token_client.balance(&contract_id), 0);
+        assert_eq!(token_client.balance(&borrower), 250);
+        assert_eq!(
+            client.get_credit_line(&borrower).unwrap().utilized_amount,
+            250
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn draw_credit_reverts_when_reserve_is_underfunded() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let borrower = Address::generate(&env);
+        let contract_id = env.register(Credit, ());
+        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+        let client = CreditClient::new(&env, &contract_id);
+        let token_admin_client = StellarAssetClient::new(&env, &token_id.address());
+
+        client.init(&admin);
+        client.set_liquidity_token(&token_id.address());
+        client.open_credit_line(&borrower, &1_000_i128, &300_u32, &70_u32);
+        token_admin_client.mint(&contract_id, &99_i128);
+
+        client.draw_credit(&borrower, &100_i128);
+    }
+
+    #[test]
+    fn draw_credit_uses_external_reserve_balance_and_transfer_path() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let borrower = Address::generate(&env);
+        let reserve = Address::generate(&env);
+        let contract_id = env.register(Credit, ());
+        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+        let client = CreditClient::new(&env, &contract_id);
+        let token_admin_client = StellarAssetClient::new(&env, &token_id.address());
+        let token_client = token::Client::new(&env, &token_id.address());
+
+        client.init(&admin);
+        client.set_liquidity_token(&token_id.address());
+        client.set_liquidity_source(&reserve);
+        client.open_credit_line(&borrower, &1_000_i128, &300_u32, &70_u32);
+
+        token_admin_client.mint(&reserve, &500_i128);
+        client.draw_credit(&borrower, &120_i128);
+
+        assert_eq!(token_client.balance(&reserve), 380);
+        assert_eq!(token_client.balance(&borrower), 120);
+        assert_eq!(token_client.balance(&contract_id), 0);
+    }
 
     #[test]
     #[should_panic]
@@ -1859,24 +1941,30 @@ mod test_coverage_gaps {
         client.draw_credit(&borrower, &100_i128);
     }
 
-    /// CreditError::from converts each variant to a contract error code.
+    /// ContractError maps to deterministic contract error codes.
     #[test]
-    fn test_credit_error_from_conversion() {
-        let err: soroban_sdk::Error = soroban_sdk::Error::from(CreditError::CreditLineNotFound);
-        assert_eq!(err, soroban_sdk::Error::from_contract_error(1));
+    fn test_contract_error_from_conversion() {
+        let not_found: soroban_sdk::Error =
+            soroban_sdk::Error::from(ContractError::CreditLineNotFound);
+        assert_eq!(not_found, soroban_sdk::Error::from_contract_error(3));
 
-        let err2: soroban_sdk::Error = soroban_sdk::Error::from(CreditError::InvalidCreditStatus);
-        assert_eq!(err2, soroban_sdk::Error::from_contract_error(2));
+        let closed: soroban_sdk::Error =
+            soroban_sdk::Error::from(ContractError::CreditLineClosed);
+        assert_eq!(closed, soroban_sdk::Error::from_contract_error(4));
 
-        let err3: soroban_sdk::Error = soroban_sdk::Error::from(CreditError::InvalidAmount);
-        assert_eq!(err3, soroban_sdk::Error::from_contract_error(3));
+        let invalid_amount: soroban_sdk::Error =
+            soroban_sdk::Error::from(ContractError::InvalidAmount);
+        assert_eq!(invalid_amount, soroban_sdk::Error::from_contract_error(5));
 
-        let err4: soroban_sdk::Error =
-            soroban_sdk::Error::from(CreditError::InsufficientUtilization);
-        assert_eq!(err4, soroban_sdk::Error::from_contract_error(4));
+        let over_limit: soroban_sdk::Error = soroban_sdk::Error::from(ContractError::OverLimit);
+        assert_eq!(over_limit, soroban_sdk::Error::from_contract_error(6));
 
-        let err5: soroban_sdk::Error = soroban_sdk::Error::from(CreditError::Unauthorized);
-        assert_eq!(err5, soroban_sdk::Error::from_contract_error(5));
+        let insufficient_liquidity: soroban_sdk::Error =
+            soroban_sdk::Error::from(ContractError::InsufficientLiquidity);
+        assert_eq!(
+            insufficient_liquidity,
+            soroban_sdk::Error::from_contract_error(15)
+        );
     }
 
     /// draw_credit panics with "overflow" when utilized_amount + amount overflows i128.

@@ -1,4 +1,4 @@
-  # Credit Contract Documentation
+# Credit Contract Documentation
 
 **Version: 2026-03-26**
 
@@ -14,47 +14,48 @@ For indexer-specific event ingestion and decoding guidance, see `docs/indexer-in
 
 Stored in persistent storage keyed by the borrower's address.
 
-| Field                | Type     | Description |
-|----------------------|----------|-----------|
-| `borrower`           | `Address` | The borrower's Stellar address |
-| `credit_limit`       | `i128`   | Maximum amount the borrower can draw |
-| `utilized_amount`    | `i128`   | Amount currently drawn |
-| `interest_rate_bps`  | `u32`    | Annual interest rate in basis points (e.g. 300 = 3%) |
-| `risk_score`         | `u32`    | Risk score assigned by the risk engine (0–100) |
-| `status`             | `CreditStatus` | Current status of the credit line |
-| `last_rate_update_ts`| `u64`    | Ledger timestamp of the last interest-rate change (0 = never updated) |
-| `accrued_interest`   | `i128`   | Cumulative capitalized interest recorded on the line |
-| `last_accrual_ts`    | `u64`    | Ledger timestamp of the last interest accrual checkpoint (0 = never accrued) |
+| Field                 | Type           | Description                                                                  |
+| --------------------- | -------------- | ---------------------------------------------------------------------------- |
+| `borrower`            | `Address`      | The borrower's Stellar address                                               |
+| `credit_limit`        | `i128`         | Maximum amount the borrower can draw                                         |
+| `utilized_amount`     | `i128`         | Amount currently drawn                                                       |
+| `interest_rate_bps`   | `u32`          | Annual interest rate in basis points (e.g. 300 = 3%)                         |
+| `risk_score`          | `u32`          | Risk score assigned by the risk engine (0–100)                               |
+| `status`              | `CreditStatus` | Current status of the credit line                                            |
+| `last_rate_update_ts` | `u64`          | Ledger timestamp of the last interest-rate change (0 = never updated)        |
+| `accrued_interest`    | `i128`         | Cumulative capitalized interest recorded on the line                         |
+| `last_accrual_ts`     | `u64`          | Ledger timestamp of the last interest accrual checkpoint (0 = never accrued) |
 
 ### `RateChangeConfig`
+
 Stored in instance storage under the `"rate_cfg"` key. Optional — when absent, no rate-change limits are enforced.
 
-| Field                     | Type  | Description |
-|---------------------------|-------|-----------|
-| `max_rate_change_bps`     | `u32` | Maximum absolute change in `interest_rate_bps` allowed per update |
-| `rate_change_min_interval`| `u64` | Minimum elapsed seconds between consecutive rate changes |
+| Field                      | Type  | Description                                                       |
+| -------------------------- | ----- | ----------------------------------------------------------------- |
+| `max_rate_change_bps`      | `u32` | Maximum absolute change in `interest_rate_bps` allowed per update |
+| `rate_change_min_interval` | `u64` | Minimum elapsed seconds between consecutive rate changes          |
 
 ### `CreditStatus`
 
-| Variant    | Value | Description |
-|------------|-------|-----------|
-| `Active`   | 0     | Credit line is open and available |
-| `Suspended`| 1     | Credit line is temporarily suspended |
-| `Defaulted`| 2     | Borrower has defaulted; draw disabled, repay allowed |
-| `Closed`   | 3     | Credit line has been permanently closed |
-| `Restricted` | 4   | Limit is below utilization; additional draws are blocked until cured |
+| Variant      | Value | Description                                                          |
+| ------------ | ----- | -------------------------------------------------------------------- |
+| `Active`     | 0     | Credit line is open and available                                    |
+| `Suspended`  | 1     | Credit line is temporarily suspended                                 |
+| `Defaulted`  | 2     | Borrower has defaulted; draw disabled, repay allowed                 |
+| `Closed`     | 3     | Credit line has been permanently closed                              |
+| `Restricted` | 4     | Limit is below utilization; additional draws are blocked until cured |
 
 ### Status transitions
 
-| From       | To         | Trigger |
-|------------|------------|---------|
-| Active     | Suspended  | Admin calls `suspend_credit_line` |
-| Active     | Defaulted  | Admin calls `default_credit_line` |
-| Suspended  | Defaulted  | Admin calls `default_credit_line` |
-| Defaulted  | Active     | Admin calls `reinstate_credit_line` |
-| Defaulted  | Closed     | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
-| Active     | Closed     | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
-| Suspended  | Closed     | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
+| From      | To        | Trigger                                                                   |
+| --------- | --------- | ------------------------------------------------------------------------- |
+| Active    | Suspended | Admin calls `suspend_credit_line`                                         |
+| Active    | Defaulted | Admin calls `default_credit_line`                                         |
+| Suspended | Defaulted | Admin calls `default_credit_line`                                         |
+| Defaulted | Active    | Admin calls `reinstate_credit_line`                                       |
+| Defaulted | Closed    | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
+| Active    | Closed    | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
+| Suspended | Closed    | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
 
 When status is **Defaulted**: `draw_credit` is disabled; `repay_credit` is still allowed.
 
@@ -63,6 +64,7 @@ When status is **Defaulted**: `draw_credit` is disabled; `repay_credit` is still
 ## Methods
 
 ### `init(env, admin)`
+
 Initializes the contract with an admin address. Must be called exactly once.
 
 - Stores `admin` in instance storage under the `"admin"` key.
@@ -70,22 +72,26 @@ Initializes the contract with an admin address. Must be called exactly once.
 - Reverts with `ContractError::AlreadyInitialized` (14) if called a second time, preventing admin takeover via re-initialization.
 
 #### Parameters
-| Parameter | Type | Description |
-|---|---|---|
-| `admin` | `Address` | Address that will hold admin authority over this contract |
+
+| Parameter | Type      | Description                                               |
+| --------- | --------- | --------------------------------------------------------- |
+| `admin`   | `Address` | Address that will hold admin authority over this contract |
 
 #### Errors
-| Condition | Error |
-|---|---|
+
+| Condition                    | Error                                    |
+| ---------------------------- | ---------------------------------------- |
 | Contract already initialized | `ContractError::AlreadyInitialized` (14) |
 
 #### Security notes
+
 - Must be called by the deployer immediately after deployment.
 - The guard checks for the presence of the `"admin"` key before writing; no storage is mutated on a rejected second call.
 - The admin address is immutable after initialization. See the Admin Rotation Proposal section for a safe rotation design.
 - `LiquiditySource` defaults to the contract address and can be updated post-init via `set_liquidity_source` (admin only).
 
 ### `set_liquidity_token(env, token_address)`
+
 Sets the Stellar Asset Contract token used for draws and repayments (admin only).
 
 - Writes the token contract address to instance storage under `DataKey::LiquidityToken`.
@@ -93,40 +99,58 @@ Sets the Stellar Asset Contract token used for draws and repayments (admin only)
 - Covered by unit tests in `contracts/credit/src/lib.rs` for both successful admin updates and rejected non-admin calls.
 
 ### `set_liquidity_source(env, reserve_address)`
+
 Sets the address that holds liquidity for draws and receives repayments (defaults to contract address).
 
 ### `open_credit_line(env, borrower, credit_limit, interest_rate_bps, risk_score)`
+
 Opens a new credit line for a borrower. Called by the backend or risk engine.
 
-| Parameter | Type | Description |
-|---|---|---|
-| `borrower` | `Address` | Borrower's address |
-| `credit_limit` | `i128` | Maximum drawable amount (must be > 0) |
-| `interest_rate_bps` | `u32` | Annual interest rate in basis points (0–10000) |
-| `risk_score` | `u32` | Risk score from the risk engine (0–100) |
+| Parameter           | Type      | Description                                    |
+| ------------------- | --------- | ---------------------------------------------- |
+| `borrower`          | `Address` | Borrower's address                             |
+| `credit_limit`      | `i128`    | Maximum drawable amount (must be > 0)          |
+| `interest_rate_bps` | `u32`     | Annual interest rate in basis points (0–10000) |
+| `risk_score`        | `u32`     | Risk score from the risk engine (0–100)        |
 
 `last_rate_update_ts`, `accrued_interest`, and `last_accrual_ts` are initialized to `0`.
 
 #### Errors
-| Condition | Error |
-|---|---|
-| `credit_limit <= 0` | `ContractError::InvalidAmount` |
-| `interest_rate_bps > 10000` | `ContractError::RateTooHigh` |
-| `risk_score > 100` | `ContractError::ScoreTooHigh` |
-| Borrower already has an Active line | `ContractError::Unauthorized` |
+
+| Condition                           | Error                          |
+| ----------------------------------- | ------------------------------ |
+| `credit_limit <= 0`                 | `ContractError::InvalidAmount` |
+| `interest_rate_bps > 10000`         | `ContractError::RateTooHigh`   |
+| `risk_score > 100`                  | `ContractError::ScoreTooHigh`  |
+| Borrower already has an Active line | `ContractError::Unauthorized`  |
 
 Emits: `("credit", "opened")` event with a `CreditLineEvent` payload.
 
 ### `draw_credit(env, borrower, amount)`
+
 Draw funds from an **Active** credit line. Caller must be the borrower.
 
 - Reverts if line is Closed, Suspended, Defaulted, or does not exist.
 - Reverts if draw would exceed `credit_limit`.
-- Transfers tokens from liquidity source → borrower.
+- If `DataKey::LiquidityToken` is configured, reads the configured reserve balance using the Stellar Asset Contract `balance` interface before attempting a transfer.
+- Reverts with `ContractError::InsufficientLiquidity` (15) if the configured `LiquiditySource` balance is lower than the requested draw amount.
+- On `InsufficientLiquidity`, borrower utilization is not updated and no token transfer is attempted.
+- When the reserve check passes, transfers tokens from liquidity source → borrower using the Stellar Asset Contract `transfer` interface.
+
+#### Draw revert conditions
+
+| Condition | Error |
+| --- | --- |
+| `amount <= 0` | `ContractError::InvalidAmount` (5) |
+| Credit line missing | `ContractError::CreditLineNotFound` (3) |
+| Credit line is `Closed` | `ContractError::CreditLineClosed` (4) |
+| Requested draw exceeds available limit | `ContractError::OverLimit` (6) |
+| Configured reserve balance is below requested draw | `ContractError::InsufficientLiquidity` (15) |
 
 Emits: `("credit", "drawn")` event.
 
 ### `repay_credit(env, borrower, amount)`
+
 Repay outstanding drawn funds.
 
 **Allowed on**: Active, Suspended, or Defaulted credit lines.  
@@ -140,19 +164,24 @@ Repay outstanding drawn funds.
 Emits: `("credit", "repay")` event with `RepaymentEvent` payload containing the effective amount transferred and new `utilized_amount`.
 
 ### `update_risk_parameters(env, borrower, credit_limit, interest_rate_bps, risk_score)`
+
 Update credit limit, interest rate, and risk score (admin only).
 
 When `RateChangeConfig` is set, rate changes are subject to:
+
 - Maximum delta ≤ `max_rate_change_bps`
 - Minimum time interval ≥ `rate_change_min_interval`
 
 Emits: `("credit", "risk_updated")` event.
 
 ### `set_rate_change_limits(env, max_rate_change_bps, rate_change_min_interval)`
+
 Configure rate-change limits (admin only).
 
 ### `get_rate_change_limits(env) -> Option<RateChangeConfig>`
+
 Returns the current rate-change configuration (or `None` if not set).
+
 ### `update_risk_parameters(env, borrower, credit_limit, interest_rate_bps, risk_score)`
 
 Update the risk parameters for an existing credit line. Admin-only.
@@ -221,6 +250,7 @@ Emits: `RiskParametersUpdatedEvent` with borrower, new credit limit, new rate, n
 - The delta check uses `abs_diff` which is symmetric and overflow-safe.
 
 #### Ledger timestamp trust assumptions
+
 - The cooldown window relies on `env.ledger().timestamp()` from the Soroban host.
 - Production deployments therefore trust the network-provided ledger timestamp to be monotonic enough for coarse cooldown enforcement.
 - This mechanism is suitable for protocol-level spacing of administrative rate changes, not for sub-second precision or wall-clock guarantees.
@@ -231,6 +261,7 @@ Emits: `RiskParametersUpdatedEvent` with borrower, new credit limit, new rate, n
   - `rate_change_min_interval == 0` disabling the timing gate entirely
 
 ### `suspend_credit_line(env, borrower)`
+
 Suspend an Active credit line (admin only).
 
 - Reverts if the line does not exist.
@@ -245,6 +276,7 @@ Interest accrual fields exist in storage, but scheduled/lazy accrual logic is no
 The intended implementation design is documented separately in [`docs/interest-accrual.md`](interest-accrual.md).
 
 ### `close_credit_line(env, borrower, closer)`
+
 Close a credit line.
 
 - Admin can close any time.
@@ -253,16 +285,19 @@ Close a credit line.
 Emits: `("credit", "closed")` event.
 
 ### `default_credit_line(env, borrower)`
+
 Mark credit line as Defaulted (admin only).
 
 Emits: `("credit", "default")` event.
 
 ### `reinstate_credit_line(env, borrower)`
+
 Reinstate a Defaulted credit line to Active (admin only).
 
 Emits: `("credit", "reinstate")` event.
 
 ### `get_credit_line(env, borrower) -> Option<CreditLineData>`
+
 View function — returns credit line data or `None`.
 
 ---
@@ -302,37 +337,38 @@ These tests validate behavior near `i128::MAX` and confirm overflow handling rem
 
 The `Credit` contract uses standard `u32` discriminants for standardized error handling across the Rust and TypeScript SDK clients. Integrator clients can match these error codes to understand failure reasons.
 
-| Error Code | Variant              | Description                                                                 |
-| ---------- | -------------------- | --------------------------------------------------------------------------- |
-| `1`        | `Unauthorized`       | Caller is not authorized to perform this action.                            |
-| `2`        | `NotAdmin`           | Caller does not have admin privileges.                                      |
-| `3`        | `CreditLineNotFound` | The specified credit line was not found.                                    |
-| `4`        | `CreditLineClosed`   | Action cannot be performed because the credit line is closed.               |
-| `5`        | `InvalidAmount`      | The requested amount is invalid (e.g., zero or negative).                   |
-| `6`        | `OverLimit`          | The requested draw exceeds the available credit limit.                      |
-| `7`        | `NegativeLimit`      | The credit limit cannot be negative.                                        |
-| `8`        | `RateTooHigh`        | The interest rate change exceeds the maximum allowed delta.                 |
-| `9`        | `ScoreTooHigh`       | The risk score is above the acceptable maximum threshold.                   |
-| `10`       | `UtilizationNotZero` | Action cannot be performed because the credit line utilization is not zero. |
-| `11`       | `Reentrancy`         | Reentrancy detected during cross-contract calls.                            |
-| `12`       | `Overflow`           | Math overflow occurred during calculation.                                  |
-| `13`       | `LimitDecreaseRequiresRepayment` | Credit limit decrease requires immediate repayment of excess amount. |
-| `14`       | `AlreadyInitialized` | Contract has already been initialized; `init` may only be called once.      |
+| Error Code | Variant                          | Description                                                                 |
+| ---------- | -------------------------------- | --------------------------------------------------------------------------- |
+| `1`        | `Unauthorized`                   | Caller is not authorized to perform this action.                            |
+| `2`        | `NotAdmin`                       | Caller does not have admin privileges.                                      |
+| `3`        | `CreditLineNotFound`             | The specified credit line was not found.                                    |
+| `4`        | `CreditLineClosed`               | Action cannot be performed because the credit line is closed.               |
+| `5`        | `InvalidAmount`                  | The requested amount is invalid (e.g., zero or negative).                   |
+| `6`        | `OverLimit`                      | The requested draw exceeds the available credit limit.                      |
+| `7`        | `NegativeLimit`                  | The credit limit cannot be negative.                                        |
+| `8`        | `RateTooHigh`                    | The interest rate change exceeds the maximum allowed delta.                 |
+| `9`        | `ScoreTooHigh`                   | The risk score is above the acceptable maximum threshold.                   |
+| `10`       | `UtilizationNotZero`             | Action cannot be performed because the credit line utilization is not zero. |
+| `11`       | `Reentrancy`                     | Reentrancy detected during cross-contract calls.                            |
+| `12`       | `Overflow`                       | Math overflow occurred during calculation.                                  |
+| `13`       | `LimitDecreaseRequiresRepayment` | Credit limit decrease requires immediate repayment of excess amount.        |
+| `14`       | `AlreadyInitialized`             | Contract has already been initialized; `init` may only be called once.      |
+| `15`       | `InsufficientLiquidity`          | The configured liquidity source does not hold enough tokens for the draw.    |
 
 ---
 
 ## Events
 
-| Topic                      | Event Type | Emitted By                  | Description |
-|----------------------------|------------|-----------------------------|-----------|
-| `("credit", "opened")`     | `opened`   | `open_credit_line`          | New credit line created |
-| `("credit", "drawn")`      | `drawn`    | `draw_credit`               | Funds drawn |
-| `("credit", "repay")`      | `repay`    | `repay_credit`              | Repayment made |
-| `("credit", "suspend")`    | `suspend`  | `suspend_credit_line`       | Line suspended |
-| `("credit", "closed")`     | `closed`   | `close_credit_line`         | Line closed |
-| `("credit", "default")`    | `default`  | `default_credit_line`       | Line defaulted |
-| `("credit", "reinstate")`  | `reinstate`| `reinstate_credit_line`     | Line reinstated |
-| `("credit", "risk_updated")`| `risk_updated` | `update_risk_parameters` | Risk parameters changed |
+| Topic                        | Event Type     | Emitted By               | Description             |
+| ---------------------------- | -------------- | ------------------------ | ----------------------- |
+| `("credit", "opened")`       | `opened`       | `open_credit_line`       | New credit line created |
+| `("credit", "drawn")`        | `drawn`        | `draw_credit`            | Funds drawn             |
+| `("credit", "repay")`        | `repay`        | `repay_credit`           | Repayment made          |
+| `("credit", "suspend")`      | `suspend`      | `suspend_credit_line`    | Line suspended          |
+| `("credit", "closed")`       | `closed`       | `close_credit_line`      | Line closed             |
+| `("credit", "default")`      | `default`      | `default_credit_line`    | Line defaulted          |
+| `("credit", "reinstate")`    | `reinstate`    | `reinstate_credit_line`  | Line reinstated         |
+| `("credit", "risk_updated")` | `risk_updated` | `update_risk_parameters` | Risk parameters changed |
 
 The contract also emits additive v2 event topics (for indexer analytics fields
 like actor/source/timestamp identifiers) while keeping v1 payloads stable. See
@@ -412,9 +448,9 @@ The two-step model lowers that risk because the recipient must explicitly accept
 
 If implemented, add a new instance-storage slot:
 
-| Key | Storage Type | Value |
-|---|---|---|
-| `"pending_admin"` | Instance | `Address` |
+| Key               | Storage Type | Value     |
+| ----------------- | ------------ | --------- |
+| `"pending_admin"` | Instance     | `Address` |
 
 The `"admin"` slot remains authoritative until `accept_admin` succeeds.
 
@@ -434,13 +470,13 @@ The `"admin"` slot remains authoritative until `accept_admin` succeeds.
 
 #### Failure modes and mitigations
 
-| Failure mode | Risk | Mitigation |
-|---|---|---|
-| Wrong address proposed | Permanent governance loss with one-step transfer | Two-step acceptance keeps current admin active until recipient confirms |
-| Proposed admin never responds | Rotation stuck in pending state | `cancel_admin_rotation` allows admin to abort and retry |
-| Current admin key compromise | Attacker can still propose a malicious admin | Not fully solvable on-chain; mitigated operationally by hardware wallets, monitoring, and fast cancellation if compromise is detected before acceptance |
-| Malicious pending admin | Attempts to seize control without nomination | `accept_admin` must require `pending_admin.require_auth()` and exact match against stored pending admin |
-| Event/indexing ambiguity | Off-chain systems misread control state | Emit explicit proposal / cancellation / acceptance events and document that only accepted admin is authoritative |
+| Failure mode                  | Risk                                             | Mitigation                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wrong address proposed        | Permanent governance loss with one-step transfer | Two-step acceptance keeps current admin active until recipient confirms                                                                                 |
+| Proposed admin never responds | Rotation stuck in pending state                  | `cancel_admin_rotation` allows admin to abort and retry                                                                                                 |
+| Current admin key compromise  | Attacker can still propose a malicious admin     | Not fully solvable on-chain; mitigated operationally by hardware wallets, monitoring, and fast cancellation if compromise is detected before acceptance |
+| Malicious pending admin       | Attempts to seize control without nomination     | `accept_admin` must require `pending_admin.require_auth()` and exact match against stored pending admin                                                 |
+| Event/indexing ambiguity      | Off-chain systems misread control state          | Emit explicit proposal / cancellation / acceptance events and document that only accepted admin is authoritative                                        |
 
 ### Operational procedure
 
@@ -479,14 +515,14 @@ All sensitive functions enforce authorization via `require_auth()`.
 
 ## Storage
 
-| Key                  | Type       | Value                     |
-|----------------------|------------|---------------------------|
-| `"admin"`            | Instance   | Admin `Address` (written once; re-init reverts) |
-| `borrower: Address`  | Persistent | `CreditLineData`          |
-| `"rate_cfg"`         | Instance   | `RateChangeConfig` (optional) |
-| `"reentrancy"`       | Instance   | Reentrancy guard (internal) |
-| `DataKey::LiquiditySource` | Instance | Reserve `Address` (defaults to contract address) |
-| `DataKey::LiquidityToken`  | Instance | Token `Address` (optional) |
+| Key                        | Type       | Value                                            |
+| -------------------------- | ---------- | ------------------------------------------------ |
+| `"admin"`                  | Instance   | Admin `Address` (written once; re-init reverts)  |
+| `borrower: Address`        | Persistent | `CreditLineData`                                 |
+| `"rate_cfg"`               | Instance   | `RateChangeConfig` (optional)                    |
+| `"reentrancy"`             | Instance   | Reentrancy guard (internal)                      |
+| `DataKey::LiquiditySource` | Instance   | Reserve `Address` (defaults to contract address) |
+| `DataKey::LiquidityToken`  | Instance   | Token `Address` (optional)                       |
 
 ---
 
@@ -551,6 +587,7 @@ soroban keys ls
 ```
 
 Fund the identity's address on testnet:
+
 1. Get the public key: `soroban keys show admin`
 2. Visit [Stellar Testnet Friendbot](https://friendbot.stellar.org/) and fund the address
 3. Wait for the transaction to confirm (~5 seconds)
@@ -858,13 +895,13 @@ soroban contract invoke --id $TOKEN --source admin --network testnet -- balance 
 
 **Troubleshooting common errors:**
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `HostError: Error(Auth, InvalidAction)` | Identity not authorized | Ensure `--source` identity is loaded and has been funded |
-| `HostError: Value(ContractError(1))` | Credit line not found | Verify credit line was opened with correct borrower address |
-| `HostError: Error(Contract, InvalidContractData)` | Contract ID invalid or contract not deployed | Check `$CONTRACT_ID` and verify deployment succeeded |
-| `Insufficient liquidity reserve` | Reserve balance too low | Fund the reserve with more tokens via `mint` or transfer |
-| `Insufficient allowance` | Token approval too low | Increase borrower's approval via token `approve` |
+| Error                                             | Cause                                        | Fix                                                         |
+| ------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------- |
+| `HostError: Error(Auth, InvalidAction)`           | Identity not authorized                      | Ensure `--source` identity is loaded and has been funded    |
+| `HostError: Value(ContractError(1))`              | Credit line not found                        | Verify credit line was opened with correct borrower address |
+| `HostError: Error(Contract, InvalidContractData)` | Contract ID invalid or contract not deployed | Check `$CONTRACT_ID` and verify deployment succeeded        |
+| `Insufficient liquidity reserve`                  | Reserve balance too low                      | Fund the reserve with more tokens via `mint` or transfer    |
+| `Insufficient allowance`                          | Token approval too low                       | Increase borrower's approval via token `approve`            |
 
 ---
 
@@ -884,13 +921,13 @@ Keys that share the contract instance TTL. If the instance is archived, all
 these keys are lost. Production deployments should call
 `env.storage().instance().extend_ttl()` periodically.
 
-| Key | Rust type | Value type | Written by | Notes |
-|-----|-----------|------------|------------|-------|
-| `Symbol("admin")` | `Symbol` | `Address` | `init` | Contract admin. Written exactly once; second write reverts with `AlreadyInitialized`. |
-| `DataKey::LiquidityToken` | `DataKey` | `Address` | `set_liquidity_token` | Token contract for reserve/draw transfers. |
-| `DataKey::LiquiditySource` | `DataKey` | `Address` | `init`, `set_liquidity_source` | Reserve address. Defaults to contract address. |
-| `Symbol("reentrancy")` | `Symbol` | `bool` | `set_reentrancy_guard`, `clear_reentrancy_guard` | Defense-in-depth flag. Cleared on every code path. |
-| `Symbol("rate_cfg")` | `Symbol` | `RateChangeConfig` | `set_rate_change_limits` | Admin-configurable rate-change governance. |
+| Key                        | Rust type | Value type         | Written by                                       | Notes                                                                                 |
+| -------------------------- | --------- | ------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `Symbol("admin")`          | `Symbol`  | `Address`          | `init`                                           | Contract admin. Written exactly once; second write reverts with `AlreadyInitialized`. |
+| `DataKey::LiquidityToken`  | `DataKey` | `Address`          | `set_liquidity_token`                            | Token contract for reserve/draw transfers.                                            |
+| `DataKey::LiquiditySource` | `DataKey` | `Address`          | `init`, `set_liquidity_source`                   | Reserve address. Defaults to contract address.                                        |
+| `Symbol("reentrancy")`     | `Symbol`  | `bool`             | `set_reentrancy_guard`, `clear_reentrancy_guard` | Defense-in-depth flag. Cleared on every code path.                                    |
+| `Symbol("rate_cfg")`       | `Symbol`  | `RateChangeConfig` | `set_rate_change_limits`                         | Admin-configurable rate-change governance.                                            |
 
 **Why instance?** These are global singleton configuration values. There is
 exactly one admin, one liquidity token, one liquidity source, and one rate
@@ -900,8 +937,8 @@ config per contract deployment. Instance storage is correct.
 
 Per-borrower records with independent TTL per entry.
 
-| Key | Rust type | Value type | Written by | Notes |
-|-----|-----------|------------|------------|-------|
+| Key                | Rust type | Value type       | Written by                                                                                      | Notes                                      |
+| ------------------ | --------- | ---------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | Borrower `Address` | `Address` | `CreditLineData` | `open_credit_line`, `draw_credit`, `repay_credit`, `update_risk_parameters`, status transitions | Long-lived borrower data. Independent TTL. |
 
 **Why persistent?** Each borrower's credit line must survive beyond a single
@@ -939,32 +976,36 @@ This section documents all contract errors and their exact error codes for consi
 
 ### ContractError Enum
 
-| Error Code | Variant | Description | Trigger |
-|------------|---------|-------------|---------|
-| 1 | `Unauthorized` | Caller is not authorized to perform this action | Various admin-only operations |
-| 2 | `NotAdmin` | Caller does not have admin privileges | `require_admin_auth` checks |
-| 3 | `CreditLineNotFound` | The specified credit line was not found | Operations on non-existent credit lines |
-| 4 | `CreditLineClosed` | Action cannot be performed because the credit line is closed | Draw operations on closed lines |
-| 5 | `InvalidAmount` | The requested amount is invalid (e.g., zero or negative) | Amount validation in draw/repay |
-| 6 | `OverLimit` | The requested draw exceeds the available credit limit | Draw limit checks |
-| 7 | `NegativeLimit` | The credit limit cannot be negative | Credit limit validation |
-| 8 | `RateTooHigh` | The interest rate exceeds maximum allowed (10000 bps = 100%) | Rate bounds validation |
-| 9 | `ScoreTooHigh` | The risk score exceeds maximum allowed (100) | Score bounds validation |
-| 10 | `UtilizationNotZero` | Action cannot be performed because the credit line utilization is not zero | Certain admin operations |
-| 11 | `Reentrancy` | Reentrancy detected during cross-contract calls | Reentrancy guard |
-| 12 | `Overflow` | Math overflow occurred during calculation | Arithmetic operations |
-| 13 | `LimitDecreaseRequiresRepayment` | Credit limit decrease requires immediate repayment of excess amount | Limit decrease validation |
+| Error Code | Variant                          | Description                                                                | Trigger                                            |
+| ---------- | -------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------- |
+| 1          | `Unauthorized`                   | Caller is not authorized to perform this action                            | Various admin-only operations                      |
+| 2          | `NotAdmin`                       | Caller does not have admin privileges                                      | `require_admin_auth` checks                        |
+| 3          | `CreditLineNotFound`             | The specified credit line was not found                                    | Operations on non-existent credit lines            |
+| 4          | `CreditLineClosed`               | Action cannot be performed because the credit line is closed               | Draw operations on closed lines                    |
+| 5          | `InvalidAmount`                  | The requested amount is invalid (e.g., zero or negative)                   | Amount validation in draw/repay                    |
+| 6          | `OverLimit`                      | The requested draw exceeds the available credit limit                      | Draw limit checks                                  |
+| 7          | `NegativeLimit`                  | The credit limit cannot be negative                                        | Credit limit validation                            |
+| 8          | `RateTooHigh`                    | The interest rate exceeds maximum allowed (10000 bps = 100%)               | Rate bounds validation                             |
+| 9          | `ScoreTooHigh`                   | The risk score exceeds maximum allowed (100)                               | Score bounds validation                            |
+| 10         | `UtilizationNotZero`             | Action cannot be performed because the credit line utilization is not zero | Certain admin operations                           |
+| 11         | `Reentrancy`                     | Reentrancy detected during cross-contract calls                            | Reentrancy guard                                   |
+| 12         | `Overflow`                       | Math overflow occurred during calculation                                  | Arithmetic operations                              |
+| 13         | `LimitDecreaseRequiresRepayment` | Credit limit decrease requires immediate repayment of excess amount        | Limit decrease validation                          |
+| 14         | `AlreadyInitialized`             | Contract has already been initialized                                      | `init` called more than once                       |
+| 15         | `InsufficientLiquidity`          | Insufficient liquidity in the reserve to fulfill the draw request          | Draw operations when reserve balance < draw amount |
 
 ### Rate and Score Validation
 
 **Interest Rate Bounds:**
+
 - Valid range: `0` to `10_000` basis points (0% to 100%)
 - Error on violation: `ContractError::RateTooHigh` (code 8)
 - Applied in: `open_credit_line`, `update_risk_parameters`
 
 **Risk Score Bounds:**
+
 - Valid range: `0` to `100`
-- Error on violation: `ContractError::ScoreTooHigh` (code 9)  
+- Error on violation: `ContractError::ScoreTooHigh` (code 9)
 - Applied in: `open_credit_line`, `update_risk_parameters`
 
 ### Boundary Test Coverage

@@ -53,6 +53,8 @@ pub enum ContractError {
     LimitDecreaseRequiresRepayment = 13,
     /// Contract has already been initialized; `init` may only be called once.
     AlreadyInitialized = 14,
+    /// Insufficient liquidity in the reserve to fulfill the draw request.
+    InsufficientLiquidity = 15,
 }
 
 /// Stored credit line data for a borrower.

@@ -1050,7 +1050,7 @@ use soroban_sdk::{Address, Env};
     }
 
     #[test]
-    #[should_panic(expected = "credit line is closed")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn test_draw_credit_rejected_when_closed() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1069,7 +1069,7 @@ use soroban_sdk::{Address, Env};
     }
 
     #[test]
-    #[should_panic(expected = "exceeds credit limit")]
+    #[should_panic(expected = "Error(Contract, #6)")]
     fn test_draw_credit_rejected_when_exceeding_limit() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1172,7 +1172,7 @@ use soroban_sdk::{Address, Env};
     // --- draw_credit: zero and negative amount guards ---
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn test_draw_credit_rejected_when_amount_is_zero() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1191,7 +1191,7 @@ use soroban_sdk::{Address, Env};
     }
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn test_draw_credit_rejected_when_amount_is_negative() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1212,7 +1212,7 @@ use soroban_sdk::{Address, Env};
     // --- repay_credit: zero and negative amount guards ---
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn test_repay_credit_rejects_non_positive_amount() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1231,7 +1231,7 @@ use soroban_sdk::{Address, Env};
     }
 
     #[test]
-    #[should_panic(expected = "amount must be positive")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn test_repay_credit_rejected_when_amount_is_negative() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1667,7 +1667,7 @@ use soroban_sdk::{Address, Env};
     }
 
     #[test]
-    #[should_panic(expected = "Insufficient liquidity reserve for requested draw amount")]
+    #[should_panic(expected = "Error(Contract, #15)")]
     fn test_draw_credit_with_insufficient_liquidity() {
         let env = Env::default();
         env.mock_all_auths();
