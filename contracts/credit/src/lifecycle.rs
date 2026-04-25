@@ -23,7 +23,10 @@ use soroban_sdk::{symbol_short, Address, Env, Symbol};
 /// - **Type**: Persistent storage (independent TTL per settlement)
 /// - **Key**: `(Symbol("liq_seen"), borrower, settlement_id)`
 /// - **Purpose**: Prevents replay of the same liquidation settlement
-fn liquidation_settlement_key(borrower: &Address, settlement_id: &Symbol) -> (Symbol, Address, Symbol) {
+fn liquidation_settlement_key(
+    borrower: &Address,
+    settlement_id: &Symbol,
+) -> (Symbol, Address, Symbol) {
     (
         symbol_short!("liq_seen"),
         borrower.clone(),
@@ -42,7 +45,7 @@ fn suspend_credit_line_internal(env: &Env, borrower: Address) {
     credit_line = crate::accrual::apply_accrual(env, credit_line);
 
     if credit_line.status != CreditStatus::Active {
-        panic!("Only active credit lines can be suspended");
+        env.panic_with_error(ContractError::CreditLineSuspended);
     }
 
     credit_line.status = CreditStatus::Suspended;
@@ -92,10 +95,9 @@ pub fn open_credit_line(
         .persistent()
         .get::<Address, CreditLineData>(&borrower)
     {
-        assert!(
-            existing.status != CreditStatus::Active,
-            "borrower already has an active credit line"
-        );
+        if existing.status == CreditStatus::Active {
+            env.panic_with_error(ContractError::AlreadyInitialized);
+        }
 
         // Prevent borrower-controlled status bypasses on existing lines.
         require_admin_auth(&env);
@@ -180,17 +182,12 @@ pub fn close_credit_line(env: Env, borrower: Address, closer: Address) {
     assert_not_paused(&env);
     closer.require_auth();
 
+    let admin = require_admin(&env);
     let is_admin = closer == admin;
     let is_borrower = closer == borrower;
 
     if !is_admin && !is_borrower {
-        panic!("unauthorized");
-    }
-
-    if is_admin {
-        closer.require_auth();
-    } else {
-        borrower.require_auth();
+        env.panic_with_error(ContractError::Unauthorized);
     }
 
     let mut credit_line: CreditLineData = match env.storage().persistent().get(&borrower) {
@@ -207,7 +204,7 @@ pub fn close_credit_line(env: Env, borrower: Address, closer: Address) {
 
     // Borrower self-close requires zero utilization.
     if is_borrower && !is_admin && credit_line.utilized_amount != 0 {
-        panic!("cannot close: utilized amount not zero");
+        env.panic_with_error(ContractError::UtilizationNotZero);
     }
 
     credit_line.status = CreditStatus::Closed;
@@ -268,7 +265,7 @@ pub fn default_credit_line(env: Env, borrower: Address) {
     credit_line = crate::accrual::apply_accrual(&env, credit_line);
 
     if credit_line.status == CreditStatus::Closed {
-        panic!("cannot default a closed credit line");
+        env.panic_with_error(ContractError::CreditLineClosed);
     }
 
     if credit_line.status == CreditStatus::Defaulted {
@@ -316,12 +313,12 @@ pub fn settle_default_liquidation(
     require_admin_auth(&env);
 
     if recovered_amount <= 0 {
-        panic!("recovered amount must be positive");
+        env.panic_with_error(ContractError::InvalidAmount);
     }
 
     let settlement_key = liquidation_settlement_key(&borrower, &settlement_id);
     if env.storage().persistent().has(&settlement_key) {
-        panic!("liquidation settlement already applied");
+        env.panic_with_error(ContractError::AlreadyInitialized); // Or a specific LiquidationAlreadyApplied
     }
 
     let mut credit_line: CreditLineData = env
@@ -334,11 +331,11 @@ pub fn settle_default_liquidation(
     credit_line = crate::accrual::apply_accrual(&env, credit_line);
 
     if credit_line.status != CreditStatus::Defaulted {
-        panic!("credit line is not defaulted");
+        env.panic_with_error(ContractError::CreditLineDefaulted);
     }
 
     if recovered_amount > credit_line.utilized_amount {
-        panic!("recovered amount exceeds utilized amount");
+        env.panic_with_error(ContractError::OverLimit); // Or a specific error
     }
 
     credit_line.utilized_amount = credit_line
@@ -389,13 +386,13 @@ pub fn settle_default_liquidation(
 ///
 /// # Panics
 /// - If the protocol is paused.
-pub fn reinstate_credit_line(env: Env, borrower: Address) {
+pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditStatus) {
     assert_not_paused(&env);
     require_admin_auth(&env);
 
     // ── Validate target status early (fail fast before storage read) ──────────
     if target_status != CreditStatus::Active && target_status != CreditStatus::Suspended {
-        panic!("invalid target status: must be Active or Suspended");
+        env.panic_with_error(ContractError::InvalidAmount);
     }
 
     // ── Load credit line ───────────────────────────────────────────────────────
@@ -409,10 +406,10 @@ pub fn reinstate_credit_line(env: Env, borrower: Address) {
     credit_line = crate::accrual::apply_accrual(&env, credit_line);
 
     if credit_line.status != CreditStatus::Defaulted {
-        panic!("credit line is not defaulted");
+        env.panic_with_error(ContractError::CreditLineDefaulted);
     }
 
-    credit_line.status = CreditStatus::Active;
+    credit_line.status = target_status;
     credit_line.suspension_ts = 0; // clear grace period anchor on reinstatement
     env.storage().persistent().set(&borrower, &credit_line);
 
@@ -514,8 +511,7 @@ mod tests_reinstate {
         client.init(&admin);
 
         // Use a token so we can draw
-        let token_id =
-            env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
+        let token_id = env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
         client.set_liquidity_token(&token_id.address());
         soroban_sdk::token::StellarAssetClient::new(&env, &token_id.address())
             .mint(&contract_id, &1_000_i128);
@@ -553,8 +549,7 @@ mod tests_reinstate {
         let client = CreditClient::new(&env, &contract_id);
         client.init(&admin);
 
-        let token_id =
-            env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
+        let token_id = env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
         client.set_liquidity_token(&token_id.address());
         soroban_sdk::token::StellarAssetClient::new(&env, &token_id.address())
             .mint(&contract_id, &1_000_i128);
@@ -575,7 +570,7 @@ mod tests_reinstate {
     // ── 5. Reinstated-to-Suspended blocks draws ───────────────────────────────
 
     #[test]
-    #[should_panic(expected = "credit line is suspended")]
+    #[should_panic(expected = "Error(Contract, #20)")]
     fn reinstate_to_suspended_blocks_draw() {
         let env = Env::default();
         env.mock_all_auths();
@@ -585,8 +580,7 @@ mod tests_reinstate {
         let client = CreditClient::new(&env, &contract_id);
         client.init(&admin);
 
-        let token_id =
-            env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
+        let token_id = env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
         client.set_liquidity_token(&token_id.address());
         soroban_sdk::token::StellarAssetClient::new(&env, &token_id.address())
             .mint(&contract_id, &1_000_i128);
@@ -611,8 +605,7 @@ mod tests_reinstate {
         let client = CreditClient::new(&env, &contract_id);
         client.init(&admin);
 
-        let token_id =
-            env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
+        let token_id = env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
         let token_address = token_id.address();
         client.set_liquidity_token(&token_address);
         soroban_sdk::token::StellarAssetClient::new(&env, &token_address)
@@ -642,7 +635,7 @@ mod tests_reinstate {
     // ── 7. Invalid source: Active → reinstate must revert ────────────────────
 
     #[test]
-    #[should_panic(expected = "credit line is not defaulted")]
+    #[should_panic(expected = "Error(Contract, #21)")]
     fn reinstate_active_line_reverts() {
         let env = Env::default();
         let (client, _admin, borrower) = setup(&env);
@@ -653,7 +646,7 @@ mod tests_reinstate {
     // ── 8. Invalid source: Suspended → reinstate must revert ─────────────────
 
     #[test]
-    #[should_panic(expected = "credit line is not defaulted")]
+    #[should_panic(expected = "Error(Contract, #21)")]
     fn reinstate_suspended_line_reverts() {
         let env = Env::default();
         let (client, _admin, borrower) = setup(&env);
@@ -664,7 +657,7 @@ mod tests_reinstate {
     // ── 9. Invalid source: Closed → reinstate must revert ────────────────────
 
     #[test]
-    #[should_panic(expected = "credit line is not defaulted")]
+    #[should_panic(expected = "Error(Contract, #21)")]
     fn reinstate_closed_line_reverts() {
         let env = Env::default();
         let (client, admin, borrower) = setup(&env);
@@ -675,7 +668,7 @@ mod tests_reinstate {
     // ── 10. Invalid target status ─────────────────────────────────────────────
 
     #[test]
-    #[should_panic(expected = "invalid target status: must be Active or Suspended")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn reinstate_with_closed_target_reverts() {
         let env = Env::default();
         let (client, _admin, borrower) = setup(&env);
@@ -684,7 +677,7 @@ mod tests_reinstate {
     }
 
     #[test]
-    #[should_panic(expected = "invalid target status: must be Active or Suspended")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn reinstate_with_defaulted_target_reverts() {
         let env = Env::default();
         let (client, _admin, borrower) = setup(&env);
@@ -753,7 +746,7 @@ mod tests_reinstate {
     // ── 13. Double reinstatement: second call reverts (line now Active) ────────
 
     #[test]
-    #[should_panic(expected = "credit line is not defaulted")]
+    #[should_panic(expected = "Error(Contract, #21)")]
     fn reinstate_twice_second_call_reverts() {
         let env = Env::default();
         let (client, _admin, borrower) = setup(&env);
@@ -776,8 +769,7 @@ mod tests_reinstate {
         let client = CreditClient::new(&env, &contract_id);
         client.init(&admin);
 
-        let token_id =
-            env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
+        let token_id = env.register_stellar_asset_contract_v2(soroban_sdk::Address::generate(&env));
         client.set_liquidity_token(&token_id.address());
         soroban_sdk::token::StellarAssetClient::new(&env, &token_id.address())
             .mint(&contract_id, &1_000_i128);
