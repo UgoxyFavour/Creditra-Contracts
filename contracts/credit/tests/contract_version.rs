@@ -39,7 +39,16 @@ fn get_contract_version_matches_module_constant() {
     let (env, contract_id) = setup();
     let client = CreditClient::new(&env, &contract_id);
     let version = client.get_contract_version();
-    assert_eq!(version.major, CONTRACT_API_VERSION.0, "major must match CONTRACT_API_VERSION");
-    assert_eq!(version.minor, CONTRACT_API_VERSION.1, "minor must match CONTRACT_API_VERSION");
-    assert_eq!(version.patch, CONTRACT_API_VERSION.2, "patch must match CONTRACT_API_VERSION");
+    assert_eq!(
+        version.major, CONTRACT_API_VERSION.0,
+        "major must match CONTRACT_API_VERSION"
+    );
+    assert_eq!(
+        version.minor, CONTRACT_API_VERSION.1,
+        "minor must match CONTRACT_API_VERSION"
+    );
+    assert_eq!(
+        version.patch, CONTRACT_API_VERSION.2,
+        "patch must match CONTRACT_API_VERSION"
+    );
 }
