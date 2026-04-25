@@ -15,6 +15,7 @@ pub enum DataKey {
     MaxDrawAmount,
     /// Per-borrower block flag; when `true`, draw_credit is rejected.
     BlockedBorrower(Address),
+    SchemaVersion,
 }
 
 pub fn admin_key(env: &Env) -> Symbol {
@@ -137,4 +138,8 @@ pub fn assert_not_paused(env: &Env) {
     if is_paused(env) {
         env.panic_with_error(crate::types::ContractError::Paused);
     }
+}
+
+pub fn grace_period_key(env: &Env) -> Symbol {
+    Symbol::new(env, "grace_cfg")
 }

@@ -37,7 +37,7 @@ use crate::storage::{
     admin_key, clear_reentrancy_guard, is_borrower_blocked, proposed_admin_key, proposed_at_key,
     rate_cfg_key, set_reentrancy_guard, DataKey,
 };
-use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
+use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig, GracePeriodConfig, GraceWaiverMode, ProtocolConfig};
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
 
 /// Contract API version (major, minor, patch).
