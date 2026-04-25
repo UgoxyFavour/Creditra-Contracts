@@ -113,7 +113,7 @@ impl Credit {
         );
     }
 
-    /// @notice Sets the token contract used for reserve/liquidity checks and draw transfers.
+    /// Sets the token contract used for reserve/liquidity checks and draw transfers.
     pub fn set_liquidity_token(env: Env, token_address: Address) {
         require_admin_auth(&env);
         env.storage()
@@ -350,17 +350,13 @@ impl Credit {
         borrow::repay_credit(env, borrower, amount)
         // --- Reentrancy guard (defense-in-depth) ---
         set_reentrancy_guard(&env);
-
-        // --- Auth: only the borrower may repay their own line ---
         borrower.require_auth();
 
-        // --- Input validation ---
         if amount <= 0 {
             clear_reentrancy_guard(&env);
             env.panic_with_error(ContractError::InvalidAmount);
         }
 
-        // --- Load credit line ---
         let mut credit_line: CreditLineData = env
             .storage()
             .persistent()
@@ -386,9 +382,6 @@ impl Credit {
             amount
         };
 
-        // --- Token transfer (when liquidity token is configured) ---
-        // We check allowance and balance *before* mutating state so that a
-        // failed transfer reverts cleanly without partial state changes.
         if effective_repay > 0 {
             let token_address: Address = env
                 .storage()
@@ -451,7 +444,6 @@ impl Credit {
 
         env.storage().persistent().set(&borrower, &credit_line);
 
-        // --- Emit event ---
         let timestamp = env.ledger().timestamp();
         publish_interest_accrued_event(
             &env,
@@ -476,7 +468,6 @@ impl Credit {
             },
         );
 
-        // --- Release reentrancy guard ---
         clear_reentrancy_guard(&env);
     }
 
@@ -609,8 +600,33 @@ impl Credit {
         lifecycle::default_credit_line(env, borrower)
     }
 
-    pub fn reinstate_credit_line(env: Env, borrower: Address) {
-        lifecycle::reinstate_credit_line(env, borrower)
+    /// Reinstate a `Defaulted` credit line to `Active` or `Suspended` (admin only).
+    ///
+    /// # State transition
+    /// `Defaulted → Active`   (when `target_status == CreditStatus::Active`)
+    /// `Defaulted → Suspended` (when `target_status == CreditStatus::Suspended`)
+    ///
+    /// This is the only valid exit from `Defaulted` other than a force-close.
+    ///
+    /// # Post-reinstatement invariants
+    /// - `utilized_amount` is preserved; it continues to satisfy
+    ///   `0 ≤ utilized_amount ≤ credit_limit`.
+    /// - `interest_rate_bps`, `risk_score`, and `credit_limit` are unchanged.
+    /// - If reinstated to `Active`, draws are immediately permitted.
+    /// - If reinstated to `Suspended`, draws remain blocked.
+    /// - A `"reinstate"` event is emitted.
+    ///
+    /// # Parameters
+    /// - `borrower` — The borrower whose line is being reinstated.
+    /// - `target_status` — Must be [`CreditStatus::Active`] or [`CreditStatus::Suspended`].
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] — caller is not the contract admin.
+    /// - Panics `"credit line is not defaulted"` if not in `Defaulted` state.
+    /// - Panics `"invalid target status: must be Active or Suspended"` for invalid targets.
+    /// - Panics `"Credit line not found"` if borrower has no credit line.
+    pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditStatus) {
+        lifecycle::reinstate_credit_line(env, borrower, target_status)
     }
 
     // duplicate wrapper removed
