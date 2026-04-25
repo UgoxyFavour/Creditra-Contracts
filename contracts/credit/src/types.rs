@@ -160,7 +160,6 @@ pub struct RateChangeConfig {
     /// Minimum elapsed seconds between two consecutive rate changes.
     pub rate_change_min_interval: u64,
 }
-}
 
 /// Admin-configurable piecewise-linear rate formula.
 ///
@@ -200,4 +199,29 @@ pub struct ContractVersion {
     pub minor: u32,
     /// Incremented on backward-compatible bug fixes.
     pub patch: u32,
+}
+
+/// Grace period waiver mode for suspended credit lines.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraceWaiverMode {
+    FullWaiver = 0,
+    ReducedRate = 1,
+}
+
+/// Admin-configurable grace period policy for suspended credit lines.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GracePeriodConfig {
+    pub grace_period_seconds: u64,
+    pub waiver_mode: GraceWaiverMode,
+    pub reduced_rate_bps: u32,
+}
+
+/// Global protocol configuration snapshot (not a contracttype due to nested Options).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    pub liquidity_token: Option<Address>,
+    pub liquidity_source: Option<Address>,
+    pub rate_change_config: Option<RateChangeConfig>,
 }

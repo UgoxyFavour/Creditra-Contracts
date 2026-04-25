@@ -154,7 +154,7 @@ mod debt_monotonic {
         let prev_debt = total_debt(&line);
 
         // -- REINSTATE: debt unchanged --
-        client.reinstate_credit_line(&borrower);
+        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
         let line = client.get_credit_line(&borrower).unwrap();
         assert_eq!(line.status, CreditStatus::Active);
         assert!(
@@ -330,7 +330,7 @@ mod debt_monotonic {
         assert_eq!(total_debt(&line), debt_at_active);
 
         // Defaulted -> Active (reinstate): debt unchanged
-        client.reinstate_credit_line(&borrower);
+        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
         let line = client.get_credit_line(&borrower).unwrap();
         assert_eq!(total_debt(&line), debt_at_active);
         assert_eq!(line.status, CreditStatus::Active);

@@ -11,7 +11,11 @@
 //!   - Value: `bool`
 
 use crate::auth::{require_admin, require_admin_auth};
-use crate::events::{publish_credit_line_event, CreditLineEvent};
+use crate::events::{
+    publish_credit_line_event, publish_default_liquidation_requested_event,
+    publish_default_liquidation_settled_event, CreditLineEvent,
+    DefaultLiquidationRequestedEvent, DefaultLiquidationSettledEvent,
+};
 use crate::risk::{MAX_INTEREST_RATE_BPS, MAX_RISK_SCORE};
 use crate::storage::assert_not_paused;
 use crate::types::{ContractError, CreditLineData, CreditStatus};
@@ -178,17 +182,12 @@ pub fn close_credit_line(env: Env, borrower: Address, closer: Address) {
     assert_not_paused(&env);
     closer.require_auth();
 
+    let admin = require_admin(&env);
     let is_admin = closer == admin;
     let is_borrower = closer == borrower;
 
     if !is_admin && !is_borrower {
         panic!("unauthorized");
-    }
-
-    if is_admin {
-        closer.require_auth();
-    } else {
-        borrower.require_auth();
     }
 
     let mut credit_line: CreditLineData = match env.storage().persistent().get(&borrower) {
@@ -387,34 +386,30 @@ pub fn settle_default_liquidation(
 ///
 /// # Panics
 /// - If the protocol is paused.
-pub fn reinstate_credit_line(env: Env, borrower: Address) {
+pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditStatus) {
     assert_not_paused(&env);
     require_admin_auth(&env);
 
-    // ── Validate target status early (fail fast before storage read) ──────────
     if target_status != CreditStatus::Active && target_status != CreditStatus::Suspended {
         panic!("invalid target status: must be Active or Suspended");
     }
 
-    // ── Load credit line ───────────────────────────────────────────────────────
     let mut credit_line: CreditLineData = env
         .storage()
         .persistent()
         .get(&borrower)
         .unwrap_or_else(|| env.panic_with_error(ContractError::CreditLineNotFound));
 
-    // Apply interest accrual before any mutation
     credit_line = crate::accrual::apply_accrual(&env, credit_line);
 
     if credit_line.status != CreditStatus::Defaulted {
         panic!("credit line is not defaulted");
     }
 
-    credit_line.status = CreditStatus::Active;
-    credit_line.suspension_ts = 0; // clear grace period anchor on reinstatement
+    credit_line.status = target_status.clone();
+    credit_line.suspension_ts = 0;
     env.storage().persistent().set(&borrower, &credit_line);
 
-    // ── Emit event ─────────────────────────────────────────────────────────────
     publish_credit_line_event(
         &env,
         (symbol_short!("credit"), symbol_short!("reinstate")),

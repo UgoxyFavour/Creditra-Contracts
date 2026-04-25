@@ -11,7 +11,7 @@
 
 use crate::auth::require_admin_auth;
 use crate::events::{publish_risk_parameters_updated, RiskParametersUpdatedEvent};
-use crate::storage::{rate_cfg_key, rate_formula_key};
+use crate::storage::{assert_not_paused, rate_cfg_key, rate_formula_key};
 use crate::types::{CreditLineData, RateChangeConfig, RateFormulaConfig};
 use soroban_sdk::{Address, Env};
 
@@ -47,6 +47,17 @@ pub fn compute_rate_from_score(cfg: &RateFormulaConfig, risk_score: u32) -> u32 
     raw.clamp(cfg.min_rate_bps, upper)
 }
 
+
+/// Set optional global rate-change caps (admin only).
+pub fn set_rate_change_limits(env: Env, max_rate_change_bps: u32, rate_change_min_interval: u64) {
+    assert_not_paused(&env);
+    require_admin_auth(&env);
+    let cfg = RateChangeConfig {
+        max_rate_change_bps,
+        rate_change_min_interval,
+    };
+    env.storage().instance().set(&rate_cfg_key(&env), &cfg);
+}
 
 /// Update risk parameters for an existing credit line (admin only).
 ///

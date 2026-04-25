@@ -15,6 +15,8 @@ pub enum DataKey {
     MaxDrawAmount,
     /// Per-borrower block flag; when `true`, draw_credit is rejected.
     BlockedBorrower(Address),
+    /// Storage schema version for migration tracking.
+    SchemaVersion,
 }
 
 pub fn admin_key(env: &Env) -> Symbol {
@@ -45,6 +47,11 @@ pub fn rate_formula_key(env: &Env) -> Symbol {
 /// Instance storage key for the protocol pause flag.
 pub fn paused_key(env: &Env) -> Symbol {
     Symbol::new(env, "paused")
+}
+
+/// Instance storage key for the grace period configuration.
+pub fn grace_period_key(env: &Env) -> Symbol {
+    Symbol::new(env, "grace_cfg")
 }
 
 /// Assert reentrancy guard is not set; set it for the duration of the call.

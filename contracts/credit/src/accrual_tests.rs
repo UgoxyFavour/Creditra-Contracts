@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::types::CreditStatus;
     use crate::Credit;
     use crate::CreditClient;
     use soroban_sdk::{
@@ -198,7 +199,7 @@ mod tests {
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod grace_period_tests {
-    use crate::types::{GracePeriodConfig, GraceWaiverMode};
+    use crate::types::{CreditStatus, GracePeriodConfig, GraceWaiverMode};
     use crate::Credit;
     use crate::CreditClient;
     use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env};
@@ -520,7 +521,7 @@ mod grace_period_tests {
         client.default_credit_line(&borrower);
 
         // Reinstate at t = 0.5 years (same timestamp, no additional accrual).
-        client.reinstate_credit_line(&borrower);
+        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
 
         // Advance 1 more year — line is now Active, grace does not apply.
         env.ledger().set_timestamp(15_768_000 + 31_536_000);
@@ -542,7 +543,7 @@ mod grace_period_tests {
         // Default then reinstate.
         env.ledger().set_timestamp(200);
         client.default_credit_line(&borrower);
-        client.reinstate_credit_line(&borrower);
+        client.reinstate_credit_line(&borrower, &CreditStatus::Active);
 
         let line = client.get_credit_line(&borrower).unwrap();
         assert_eq!(line.suspension_ts, 0);

@@ -451,7 +451,7 @@ fn run_transition(
             (_, CreditStatus::Suspended) => client.suspend_credit_line(&borrower),
             (_, CreditStatus::Defaulted) => client.default_credit_line(&borrower),
             (_, CreditStatus::Closed) => client.close_credit_line(&borrower, &closer),
-            (_, CreditStatus::Active) => client.reinstate_credit_line(&borrower),
+            (_, CreditStatus::Active) => client.reinstate_credit_line(&borrower, &CreditStatus::Active),
             (_, CreditStatus::Restricted) => {
                 panic!("Restricted target not supported in this harness")
             }
@@ -553,7 +553,7 @@ fn no_double_interest_on_reinstate() {
     let interest_at_default = after_default.accrued_interest;
 
     // Reinstate immediately (no time elapsed).
-    client.reinstate_credit_line(&borrower);
+    client.reinstate_credit_line(&borrower, &CreditStatus::Active);
     let after_reinstate = client.get_credit_line(&borrower).unwrap();
     assert_eq!(after_reinstate.status, CreditStatus::Active);
     assert_accounting_invariant(&after_reinstate, "after reinstate");
@@ -676,7 +676,7 @@ fn reinstate_only_valid_from_defaulted() {
         }
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.reinstate_credit_line(&borrower);
+            client.reinstate_credit_line(&borrower, &CreditStatus::Active);
         }));
         assert!(
             result.is_err(),
@@ -767,7 +767,7 @@ fn full_lifecycle_invariant_chain() {
     assert_eq!(c3.utilized_amount, c2.utilized_amount, "no time elapsed, debt unchanged");
 
     // Reinstate.
-    client.reinstate_credit_line(&borrower);
+    client.reinstate_credit_line(&borrower, &CreditStatus::Active);
     let c4 = client.get_credit_line(&borrower).unwrap();
     assert_eq!(c4.status, CreditStatus::Active);
     assert_accounting_invariant(&c4, "c4 Reinstated");
