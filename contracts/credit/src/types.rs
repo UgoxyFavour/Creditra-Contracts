@@ -160,6 +160,39 @@ pub struct RateChangeConfig {
     /// Minimum elapsed seconds between two consecutive rate changes.
     pub rate_change_min_interval: u64,
 }
+
+/// Grace period waiver mode for suspended credit lines.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraceWaiverMode {
+    /// Zero interest during the grace window.
+    FullWaiver = 0,
+    /// Reduced interest rate during the grace window.
+    ReducedRate = 1,
+}
+
+/// Admin-configurable grace period policy for suspended credit lines.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GracePeriodConfig {
+    /// Duration of the grace window in seconds.
+    pub grace_period_seconds: u64,
+    /// How interest is waived during the grace window.
+    pub waiver_mode: GraceWaiverMode,
+    /// Rate applied during the window when `waiver_mode` is `ReducedRate` (bps).
+    pub reduced_rate_bps: u32,
+}
+
+/// Snapshot of global protocol configuration returned by `get_protocol_config`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    /// Configured liquidity token address, or `None` if not yet set.
+    pub liquidity_token: Option<soroban_sdk::Address>,
+    /// Configured liquidity source address, or `None` if not yet set.
+    pub liquidity_source: Option<soroban_sdk::Address>,
+    /// Rate-change limit configuration, or `None` if not yet set.
+    pub rate_change_config: Option<RateChangeConfig>,
 }
 
 /// Admin-configurable piecewise-linear rate formula.

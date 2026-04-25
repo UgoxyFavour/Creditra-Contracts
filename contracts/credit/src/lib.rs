@@ -25,18 +25,17 @@ pub mod types;
 
 use crate::auth::{require_admin, require_admin_auth};
 use crate::events::{
-    publish_admin_rotation_accepted, publish_admin_rotation_proposed, publish_credit_line_event,
+    publish_admin_rotation_accepted, publish_admin_rotation_proposed,
     publish_drawn_event, publish_interest_accrued_event, publish_repayment_event,
-    AdminRotationAcceptedEvent, AdminRotationProposedEvent, CreditLineEvent, DrawnEvent,
+    AdminRotationAcceptedEvent, AdminRotationProposedEvent, DrawnEvent,
     InterestAccruedEvent, RepaymentEvent,
 };
-use crate::risk::{MAX_INTEREST_RATE_BPS, MAX_RISK_SCORE};
 use crate::storage::{
-    admin_key, clear_reentrancy_guard, is_borrower_blocked, proposed_admin_key, proposed_at_key,
+    admin_key, assert_not_paused, clear_reentrancy_guard, proposed_admin_key, proposed_at_key,
     rate_cfg_key, set_reentrancy_guard, DataKey,
 };
-use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig};
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
+use crate::types::{ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode, ProtocolConfig, RateChangeConfig};
+use soroban_sdk::{contract, contractimpl, token, Address, Env};
 
 /// Contract API version (major, minor, patch).
 /// Increment major on breaking ABI/storage changes, minor on additive features, patch on fixes.
@@ -155,54 +154,6 @@ impl Credit {
         lifecycle::open_credit_line(env, borrower, credit_limit, interest_rate_bps, risk_score)
     }
 
-    pub fn draw_credit(env: Env, borrower: Address, amount: i128) {
-        borrow::draw_credit(env, borrower, amount)
-        assert!(credit_limit > 0, "credit_limit must be greater than zero");
-        if interest_rate_bps > MAX_INTEREST_RATE_BPS {
-            env.panic_with_error(ContractError::RateTooHigh);
-        }
-        if risk_score > MAX_RISK_SCORE {
-            env.panic_with_error(ContractError::ScoreTooHigh);
-        }
-
-        if let Some(existing) = env
-            .storage()
-            .persistent()
-            .get::<Address, CreditLineData>(&borrower)
-        {
-            assert!(
-                existing.status != CreditStatus::Active,
-                "borrower already has an active credit line"
-            );
-        }
-
-        let credit_line = CreditLineData {
-            borrower: borrower.clone(),
-            credit_limit,
-            utilized_amount: 0,
-            interest_rate_bps,
-            risk_score,
-            status: CreditStatus::Active,
-            last_rate_update_ts: 0,
-            accrued_interest: 0,
-            last_accrual_ts: env.ledger().timestamp(),
-        };
-        env.storage().persistent().set(&borrower, &credit_line);
-
-        publish_credit_line_event(
-            &env,
-            (symbol_short!("credit"), symbol_short!("opened")),
-            CreditLineEvent {
-                event_type: symbol_short!("opened"),
-                borrower: borrower.clone(),
-                status: CreditStatus::Active,
-                credit_limit,
-                interest_rate_bps,
-                risk_score,
-            },
-        );
-    }
-
     /// Draws credit by transferring liquidity tokens to the borrower.
     ///
     /// Enforces status, limit, and liquidity checks before executing the transfer.
@@ -220,7 +171,7 @@ impl Credit {
     /// - [`ContractError::CreditLineClosed`] — credit line is closed.
     /// - [`ContractError::Overflow`] — utilized amount would overflow.
     /// - [`ContractError::DrawExceedsMaxAmount`] — amount exceeds per-tx draw cap.
-    pub fn draw_credit(env: Env, borrower: Address, amount: i128) -> () {
+    pub fn draw_credit(env: Env, borrower: Address, amount: i128) {
         assert_not_paused(&env);
         set_reentrancy_guard(&env);
 
@@ -230,12 +181,6 @@ impl Credit {
         if amount <= 0 {
             clear_reentrancy_guard(&env);
             panic!("amount must be positive");
-        }
-
-        // Global emergency freeze: block all draws during liquidity reserve operations.
-        if freeze::is_draws_frozen(&env) {
-            clear_reentrancy_guard(&env);
-            env.panic_with_error(ContractError::DrawsFrozen);
         }
 
         // Global emergency freeze: block all draws during liquidity reserve operations.
@@ -347,7 +292,6 @@ impl Credit {
     }
 
     pub fn repay_credit(env: Env, borrower: Address, amount: i128) {
-        borrow::repay_credit(env, borrower, amount)
         // --- Reentrancy guard (defense-in-depth) ---
         set_reentrancy_guard(&env);
         borrower.require_auth();
@@ -631,9 +575,12 @@ impl Credit {
 
     // duplicate wrapper removed
 
+    /// Return the credit line for `borrower`, or `None` if no line exists.
+    ///
+    /// No authentication required — this is a pure read with no side effects.
+    /// Accrual is lazy; pending interest since the last checkpoint is not applied here.
     pub fn get_credit_line(env: Env, borrower: Address) -> Option<CreditLineData> {
         query::get_credit_line(env, borrower)
-        env.storage().persistent().get(&borrower)
     }
 
     // ── Global draw-freeze switch ─────────────────────────────────────────────
