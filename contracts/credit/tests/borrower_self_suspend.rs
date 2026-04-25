@@ -44,7 +44,11 @@ fn self_suspend_requires_only_borrower_auth() {
         .self_suspend_credit_line(&borrower);
 
     let auths = env.auths();
-    assert_eq!(auths.len(), 1, "self-suspend should require exactly one auth");
+    assert_eq!(
+        auths.len(),
+        1,
+        "self-suspend should require exactly one auth"
+    );
     assert_eq!(auths[0].0, borrower, "borrower auth must be required");
 
     let line = client.get_credit_line(&borrower).unwrap();
