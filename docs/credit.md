@@ -39,7 +39,7 @@ Stored in instance storage under the `"rate_cfg"` key. Optional — when absent,
 | Variant    | Value | Description |
 |------------|-------|-----------|
 | `Active`   | 0     | Credit line is open and available |
-| `Suspended`| 1     | Credit line is temporarily suspended |
+| `Suspended`| 1     | Credit line is temporarily suspended; draws are blocked and repayments remain allowed |
 | `Defaulted`| 2     | Borrower has defaulted; draw disabled, repay allowed |
 | `Closed`   | 3     | Credit line has been permanently closed |
 | `Restricted` | 4   | Limit is below utilization; additional draws are blocked until cured |
@@ -49,14 +49,16 @@ Stored in instance storage under the `"rate_cfg"` key. Optional — when absent,
 | From       | To         | Trigger |
 |------------|------------|---------|
 | Active     | Suspended  | Admin calls `suspend_credit_line` |
+| Active     | Suspended  | Borrower calls `self_suspend_credit_line` |
 | Active     | Defaulted  | Admin calls `default_credit_line` |
 | Suspended  | Defaulted  | Admin calls `default_credit_line` |
+| Suspended  | Active     | Admin-approved `open_credit_line` reopen workflow |
 | Defaulted  | Active     | Admin calls `reinstate_credit_line` |
 | Defaulted  | Closed     | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
 | Active     | Closed     | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
 | Suspended  | Closed     | Admin or borrower (when `utilized_amount == 0`) calls `close_credit_line` |
 
-When status is **Defaulted**: `draw_credit` is disabled; `repay_credit` is still allowed.
+When status is **Suspended** or **Defaulted**: `draw_credit` is disabled; `repay_credit` is still allowed.
 
 ---
 
@@ -114,6 +116,9 @@ Sets the address that holds liquidity for draws and receives repayments (default
 
 ### `open_credit_line(env, borrower, credit_limit, interest_rate_bps, risk_score)`
 Opens a new credit line for a borrower. Called by the backend or risk engine.
+
+- Creating a brand-new line preserves the existing backend/risk-engine trust boundary.
+- Re-opening any existing non-`Active` line now requires admin auth so a borrower cannot self-suspend and then reactivate themselves on-chain.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -301,6 +306,17 @@ Suspend an Active credit line (admin only).
 
 Emits: `("credit", "suspend")` event.
 
+### `self_suspend_credit_line(env, borrower)`
+Allow a borrower to suspend their own Active credit line as a safety control.
+
+- Requires borrower auth.
+- Reverts if the line does not exist.
+- Reverts unless the current status is `Active`.
+- Blocks future draws but continues to allow `repay_credit`.
+- Does not give the borrower any reinstatement path; reactivation still requires an admin-controlled workflow.
+
+Emits: `("credit", "suspend")` event.
+
 ### Interest accrual
 
 Interest accrual fields exist in storage, but scheduled/lazy accrual logic is not yet active in the contract.
@@ -333,8 +349,11 @@ Apply auction liquidation proceeds to a defaulted line (admin only).
 
 Emits: `("credit", "liq_setl")` event. When fully settled, also emits `("credit", "closed")`.
 
-### `reinstate_credit_line(env, borrower, target_status)`
-Reinstate a Defaulted credit line to `target_status` (Active or Suspended). Admin only.
+### `reinstate_credit_line(env, borrower)`
+Reinstate a Defaulted credit line to Active. Admin only.
+
+- Requires `status == Defaulted`.
+- Self-suspended lines are not borrower-reinstatable. Any return to `Active` after borrower self-suspension must come from an admin-approved reopen workflow.
 
 Emits: `("credit", "reinstate")` event.
 
@@ -455,6 +474,7 @@ like actor/source/timestamp identifiers) while keeping v1 payloads stable. See
 | `repay_credit`           | Borrower              |
 | `update_risk_parameters` | Admin / risk engine   |
 | `suspend_credit_line`    | Admin                 |
+| `self_suspend_credit_line` | Borrower            |
 | `close_credit_line`      | Admin or borrower     |
 | `default_credit_line`    | Admin                 |
 | `settle_default_liquidation` | Admin             |
