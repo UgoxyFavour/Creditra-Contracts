@@ -147,6 +147,7 @@ Draw funds from an **Active** credit line. Only the borrower is authorized to ca
 - Reverts with `ContractError::CreditLineSuspended` (18), `ContractError::CreditLineDefaulted` (19), or `ContractError::CreditLineClosed` (4) based on status.
 - Reverts with `ContractError::InvalidAmount` (5) if `amount <= 0`.
 - Reverts with `ContractError::Overflow` (12) on arithmetic overflow.
+- Reverts with `ContractError::DrawCooldownActive` (20) when a borrower attempts to draw again before the configured cooldown interval has elapsed.
 - Reverts with `ContractError::OverLimit` (6) if draw exceeds `credit_limit`.
 - Transfers tokens from liquidity source → borrower.
 
@@ -377,6 +378,14 @@ Re-enable `draw_credit` after a global freeze (admin only).
 - Idempotent: calling when already unfrozen still emits the event.
 
 Emits: `("credit", "drw_freeze")` with `DrawsFrozenEvent { frozen: false, timestamp, actor }`.
+
+### `set_draw_min_interval(env, seconds)`
+Set the per-borrower draw cooldown interval in seconds (admin only).
+
+- `seconds > 0` enforces a minimum interval between successful draws for every borrower.
+- `seconds = 0` disables the per-borrower cooldown.
+- This setting is optional and defaults to disabled when unset.
+- It affects only `draw_credit`; `repay_credit` remains available regardless of the cooldown.
 
 ### `is_draws_frozen(env) -> bool`
 Returns `true` when draws are globally frozen. Defaults to `false` when the key has never been set. No auth required.
@@ -1116,6 +1125,7 @@ Not currently used in the contract. The reentrancy guard is stored in instance s
    - The borrower would need to re-establish their credit line
 | `DataKey::LiquidityToken` | `DataKey` | `Address` | `set_liquidity_token` | Token contract for reserve/draw transfers. |
 | `DataKey::LiquiditySource` | `DataKey` | `Address` | `init`, `set_liquidity_source` | Reserve address. Defaults to contract address. |
+| `DataKey::DrawMinIntervalSeconds` | `DataKey` | `u64` | `set_draw_min_interval` | Minimum per-borrower draw interval in seconds. Absent = disabled. |
 | `Symbol("reentrancy")` | `Symbol` | `bool` | `set_reentrancy_guard`, `clear_reentrancy_guard` | Defense-in-depth flag. Cleared on every code path. |
 | `Symbol("rate_cfg")` | `Symbol` | `RateChangeConfig` | `set_rate_change_limits` | Admin-configurable rate-change governance. |
 | `DataKey::DrawsFrozen` | `DataKey` | `bool` | `freeze_draws`, `unfreeze_draws` | Global emergency draw freeze. Absent = `false` (draws allowed). |

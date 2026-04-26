@@ -14,11 +14,11 @@ mod accrual;
 #[cfg(test)]
 mod accrual_tests;
 mod auth;
+mod borrow;
 mod config;
 mod events;
 mod freeze;
 mod lifecycle;
-mod query;
 mod risk;
 mod storage;
 pub mod types;
@@ -155,54 +155,6 @@ impl Credit {
         lifecycle::open_credit_line(env, borrower, credit_limit, interest_rate_bps, risk_score)
     }
 
-    pub fn draw_credit(env: Env, borrower: Address, amount: i128) {
-        borrow::draw_credit(env, borrower, amount)
-        assert!(credit_limit > 0, "credit_limit must be greater than zero");
-        if interest_rate_bps > MAX_INTEREST_RATE_BPS {
-            env.panic_with_error(ContractError::RateTooHigh);
-        }
-        if risk_score > MAX_RISK_SCORE {
-            env.panic_with_error(ContractError::ScoreTooHigh);
-        }
-
-        if let Some(existing) = env
-            .storage()
-            .persistent()
-            .get::<Address, CreditLineData>(&borrower)
-        {
-            assert!(
-                existing.status != CreditStatus::Active,
-                "borrower already has an active credit line"
-            );
-        }
-
-        let credit_line = CreditLineData {
-            borrower: borrower.clone(),
-            credit_limit,
-            utilized_amount: 0,
-            interest_rate_bps,
-            risk_score,
-            status: CreditStatus::Active,
-            last_rate_update_ts: 0,
-            accrued_interest: 0,
-            last_accrual_ts: env.ledger().timestamp(),
-        };
-        env.storage().persistent().set(&borrower, &credit_line);
-
-        publish_credit_line_event(
-            &env,
-            (symbol_short!("credit"), symbol_short!("opened")),
-            CreditLineEvent {
-                event_type: symbol_short!("opened"),
-                borrower: borrower.clone(),
-                status: CreditStatus::Active,
-                credit_limit,
-                interest_rate_bps,
-                risk_score,
-            },
-        );
-    }
-
     /// Draws credit by transferring liquidity tokens to the borrower.
     ///
     /// Enforces status, limit, and liquidity checks before executing the transfer.
@@ -290,6 +242,27 @@ impl Credit {
             }
         }
 
+        // Per-borrower draw cooldown: enforce the configured minimum interval between
+        // successful draws for the same borrower. No cooldown is applied when the key
+        // is unset.
+        if let Some(min_interval) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u64>(&DataKey::DrawMinIntervalSeconds)
+        {
+            if let Some(last_draw_ts) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u64>(&DataKey::LastDrawTs(borrower.clone()))
+            {
+                let now = env.ledger().timestamp();
+                if now < last_draw_ts.saturating_add(min_interval) {
+                    clear_reentrancy_guard(&env);
+                    env.panic_with_error(ContractError::DrawCooldownActive);
+                }
+            }
+        }
+
         // Overflow-safe utilization update.
         let updated_utilized = credit_line
             .utilized_amount
@@ -354,6 +327,9 @@ impl Credit {
         env.storage().persistent().set(&borrower, &credit_line);
 
         let timestamp = env.ledger().timestamp();
+        env.storage()
+            .persistent()
+            .set(&DataKey::LastDrawTs(borrower.clone()), &timestamp);
         publish_drawn_event(
             &env,
             DrawnEvent {
@@ -367,7 +343,6 @@ impl Credit {
     }
 
     pub fn repay_credit(env: Env, borrower: Address, amount: i128) {
-        borrow::repay_credit(env, borrower, amount)
         // --- Reentrancy guard (defense-in-depth) ---
         set_reentrancy_guard(&env);
         borrower.require_auth();
@@ -624,6 +599,19 @@ impl Credit {
         env.storage().instance().get(&DataKey::MaxDrawAmount)
     }
 
+    /// Set the minimum interval between borrower draws.
+    /// Pass `0` to disable the per-borrower draw cooldown.
+    pub fn set_draw_min_interval(env: Env, seconds: u64) {
+        assert_not_paused(&env);
+        require_admin_auth(&env);
+        crate::storage::set_draw_min_interval(&env, seconds);
+    }
+
+    /// Get the configured minimum draw interval between borrower draws.
+    pub fn get_draw_min_interval(env: Env) -> Option<u64> {
+        crate::storage::get_draw_min_interval(&env)
+    }
+
     /// Get the current storage schema version.
     pub fn get_schema_version(env: Env) -> Option<u32> {
         env.storage().instance().get(&DataKey::SchemaVersion)
@@ -681,7 +669,6 @@ impl Credit {
     // duplicate wrapper removed
 
     pub fn get_credit_line(env: Env, borrower: Address) -> Option<CreditLineData> {
-        query::get_credit_line(env, borrower)
         env.storage().persistent().get(&borrower)
     }
 
@@ -3235,7 +3222,105 @@ mod test_max_draw_amount {
         assert_eq!(client.get_max_draw_amount().unwrap(), 750);
     }
 
-    // ── reentrancy guard cleared after cap revert (sequential draw succeeds) ──
+    #[test]
+    #[should_panic]
+    fn set_draw_min_interval_requires_admin_auth() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(Credit, ());
+        let client = CreditClient::new(&env, &contract_id);
+        client.init(&admin);
+        client.set_draw_min_interval(&60_u64);
+    }
+
+    #[test]
+    fn get_draw_min_interval_unset_returns_none() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(Credit, ());
+        let client = CreditClient::new(&env, &contract_id);
+        client.init(&admin);
+
+        assert!(client.get_draw_min_interval().is_none());
+    }
+
+    #[test]
+    fn get_draw_min_interval_after_set_returns_value() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(Credit, ());
+        let client = CreditClient::new(&env, &contract_id);
+        client.init(&admin);
+
+        client.set_draw_min_interval(&60_u64);
+        assert_eq!(client.get_draw_min_interval().unwrap(), 60);
+    }
+
+    #[test]
+    fn draw_credit_without_cooldown_allows_consecutive_draws() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let borrower = Address::generate(&env);
+        let (client, _admin) = setup_with_reserve(&env, &borrower, 1_000, 1_000);
+
+        client.draw_credit(&borrower, &200_i128);
+        client.draw_credit(&borrower, &100_i128);
+
+        let line = client.get_credit_line(&borrower).unwrap();
+        assert_eq!(line.utilized_amount, 300);
+    }
+
+    #[test]
+    #[should_panic]
+    fn draw_credit_respects_cooldown_when_configured() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let borrower = Address::generate(&env);
+        let (client, _admin) = setup_with_reserve(&env, &borrower, 1_000, 1_000);
+
+        client.set_draw_min_interval(&60_u64);
+        client.draw_credit(&borrower, &200_i128);
+        client.draw_credit(&borrower, &100_i128);
+    }
+
+    #[test]
+    fn draw_credit_succeeds_after_cooldown_interval() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let borrower = Address::generate(&env);
+        let (client, _admin) = setup_with_reserve(&env, &borrower, 1_000, 1_000);
+
+        client.set_draw_min_interval(&60_u64);
+        client.draw_credit(&borrower, &200_i128);
+        env.ledger().set_timestamp(env.ledger().timestamp() + 61);
+        client.draw_credit(&borrower, &100_i128);
+
+        let line = client.get_credit_line(&borrower).unwrap();
+        assert_eq!(line.utilized_amount, 300);
+    }
+
+    #[test]
+    fn repay_credit_is_not_blocked_by_draw_cooldown() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let borrower = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let contract_id = env.register(Credit, ());
+        let client = CreditClient::new(&env, &contract_id);
+        client.init(&admin);
+        client.open_credit_line(&borrower, &1_000_i128, &300_u32, &70_u32);
+
+        client.set_draw_min_interval(&60_u64);
+        client.draw_credit(&borrower, &200_i128);
+        client.repay_credit(&borrower, &100_i128);
+
+        let line = client.get_credit_line(&borrower).unwrap();
+        assert_eq!(line.utilized_amount, 100);
+    }
+
+    // ── reentrancy guard cleared after cap revert (sequential draw succeeds) ────────────────────────────────────────────
 
     #[test]
     fn draw_cap_guard_cleared_after_revert_allows_subsequent_draw() {

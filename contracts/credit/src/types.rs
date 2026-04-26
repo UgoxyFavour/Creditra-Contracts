@@ -160,7 +160,6 @@ pub struct RateChangeConfig {
     /// Minimum elapsed seconds between two consecutive rate changes.
     pub rate_change_min_interval: u64,
 }
-}
 
 /// Admin-configurable piecewise-linear rate formula.
 ///
