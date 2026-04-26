@@ -330,9 +330,20 @@ Emits: `("credit", "suspend")` event.
 
 ### Interest accrual
 
-Interest accrual fields exist in storage, but scheduled/lazy accrual logic is not yet active in the contract.
+Interest accrual is implemented with lazy evaluation that applies interest when credit lines are touched. The implementation uses simple interest with floor rounding to favor borrowers.
 
-The intended implementation design is documented separately in [`docs/interest-accrual.md`](interest-accrual.md).
+**Key Features:**
+- Simple interest calculation based on annual rate in basis points
+- Lazy accrual triggered on state-changing operations
+- Grace period support for suspended credit lines
+- Comprehensive event logging for audit trails
+- Backward compatible with existing credit lines
+
+**Documentation:**
+- Implementation details: [`docs/interest-accrual.md`](interest-accrual.md)
+- Design specification: [`docs/interest-accrual-design.md`](interest-accrual-design.md)
+
+**Current Status:** ✅ Implemented and active
 
 ### `close_credit_line(env, borrower, closer)`
 Close a credit line.
