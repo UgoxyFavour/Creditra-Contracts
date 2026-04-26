@@ -118,26 +118,35 @@ Sets the address that holds liquidity for draws and receives repayments (default
 Opens a new credit line for a borrower. Called by the backend or risk engine.
 
 - Creating a brand-new line preserves the existing backend/risk-engine trust boundary.
-- Re-opening any existing non-`Active` line now requires admin auth so a borrower cannot self-suspend and then reactivate themselves on-chain.
+- Re-opening any existing non-`Active` line requires admin auth so a borrower cannot self-suspend and then reactivate themselves on-chain.
+- On reopen, `utilized_amount`, `accrued_interest`, `last_rate_update_ts`, and `suspension_ts` are reset to `0`.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `borrower` | `Address` | Borrower's address |
 | `credit_limit` | `i128` | Maximum drawable amount (must be > 0) |
-| `interest_rate_bps` | `u32` | Annual interest rate in basis points (0–10000) |
-| `risk_score` | `u32` | Risk score from the risk engine (0–100) |
+| `interest_rate_bps` | `u32` | Annual interest rate in basis points (0–10000); matches `MAX_INTEREST_RATE_BPS` |
+| `risk_score` | `u32` | Risk score from the risk engine (0–100); matches `MAX_RISK_SCORE` |
 
-`last_rate_update_ts`, `accrued_interest`, and `last_accrual_ts` are initialized to `0`.
+`last_rate_update_ts`, `accrued_interest`, `last_accrual_ts`, and `suspension_ts` are initialized to `0`.
 
 #### Errors
 | Condition | Error |
 |---|---|
-| `credit_limit <= 0` | `ContractError::InvalidAmount` |
-| `interest_rate_bps > 10000` | `ContractError::RateTooHigh` |
-| `risk_score > 100` | `ContractError::ScoreTooHigh` |
-| Borrower already has an Active line | `ContractError::Unauthorized` |
+| `credit_limit <= 0` | panics: `"credit_limit must be greater than zero"` |
+| `interest_rate_bps > 10000` | `ContractError::RateTooHigh` (8) |
+| `risk_score > 100` | `ContractError::ScoreTooHigh` (9) |
+| Borrower already has an `Active` line | panics: `"borrower already has an active credit line"` |
+| Re-opening non-Active line by non-admin | auth error |
+| Protocol is paused | `ContractError::Paused` (18) |
 
-Emits: `("credit", "opened")` event with a `CreditLineEvent` payload.
+#### Events
+Emits `("credit", "opened")` with `CreditLineEvent { event_type, borrower, status: Active, credit_limit, interest_rate_bps, risk_score }`.
+
+#### Security notes
+- Admin auth is required to reopen a non-Active line, preventing borrowers from self-reinstating via self-suspend + reopen.
+- No auth is required for a brand-new line (no existing record); the backend/risk engine is the trusted caller.
+- Validation runs before any storage write — failed calls leave existing state unchanged.
 
 ### `draw_credit(env, borrower, amount)`
 Draw funds from an **Active** credit line. Only the borrower is authorized to call this function.
@@ -147,6 +156,7 @@ Draw funds from an **Active** credit line. Only the borrower is authorized to ca
 - Reverts with `ContractError::CreditLineSuspended` (18), `ContractError::CreditLineDefaulted` (19), or `ContractError::CreditLineClosed` (4) based on status.
 - Reverts with `ContractError::InvalidAmount` (5) if `amount <= 0`.
 - Reverts with `ContractError::Overflow` (12) on arithmetic overflow.
+- Reverts with `ContractError::DrawCooldownActive` (20) when a borrower attempts to draw again before the configured cooldown interval has elapsed.
 - Reverts with `ContractError::OverLimit` (6) if draw exceeds `credit_limit`.
 - Transfers tokens from liquidity source → borrower.
 
@@ -359,7 +369,30 @@ Reinstate a Defaulted credit line to Active. Admin only.
 Emits: `("credit", "reinstate")` event.
 
 ### `get_credit_line(env, borrower) -> Option<CreditLineData>`
-View function — returns credit line data or `None`.
+View function — returns the full [`CreditLineData`] for `borrower`, or `None` if no credit line exists.
+
+#### Authentication
+No authentication required. Any caller — indexer, client SDK, or another contract — may call this freely.
+
+#### Stable serialization
+The returned struct is stable for integrators. Fields are serialized in declaration order (see `types.rs`). New fields will only ever be appended; existing field positions will not change.
+
+#### Accrual note
+Interest accrual is lazy. `accrued_interest` and `utilized_amount` reflect the last mutating call (draw, repay, suspend, etc.). Pending interest since the last checkpoint is **not** applied by this query. To get the current accrued value, trigger a mutating call first or compute it off-chain using `last_accrual_ts` and `interest_rate_bps`.
+
+#### Key fields for indexers
+
+| Field | Description |
+|---|---|
+| `last_rate_update_ts` | Ledger timestamp of the last rate change; `0` means the rate has never been updated |
+| `last_accrual_ts` | Ledger timestamp of the last interest checkpoint; `0` means no accrual has run yet |
+| `accrued_interest` | Capitalized interest included in `utilized_amount` |
+| `status` | Current lifecycle state (`Active`, `Suspended`, `Defaulted`, `Closed`, `Restricted`) |
+
+#### Security notes
+- Pure read — no storage is mutated, no auth is checked, no events are emitted.
+- Safe to call from untrusted contexts; the worst outcome is a stale accrual snapshot (see accrual note above).
+- Returns `None` for addresses that have never had a credit line; callers must handle this case.
 
 ### `freeze_draws(env)`
 Freeze all `draw_credit` calls contract-wide (admin only).
@@ -378,6 +411,14 @@ Re-enable `draw_credit` after a global freeze (admin only).
 - Idempotent: calling when already unfrozen still emits the event.
 
 Emits: `("credit", "drw_freeze")` with `DrawsFrozenEvent { frozen: false, timestamp, actor }`.
+
+### `set_draw_min_interval(env, seconds)`
+Set the per-borrower draw cooldown interval in seconds (admin only).
+
+- `seconds > 0` enforces a minimum interval between successful draws for every borrower.
+- `seconds = 0` disables the per-borrower cooldown.
+- This setting is optional and defaults to disabled when unset.
+- It affects only `draw_credit`; `repay_credit` remains available regardless of the cooldown.
 
 ### `is_draws_frozen(env) -> bool`
 Returns `true` when draws are globally frozen. Defaults to `false` when the key has never been set. No auth required.
@@ -1117,6 +1158,7 @@ Not currently used in the contract. The reentrancy guard is stored in instance s
    - The borrower would need to re-establish their credit line
 | `DataKey::LiquidityToken` | `DataKey` | `Address` | `set_liquidity_token` | Token contract for reserve/draw transfers. |
 | `DataKey::LiquiditySource` | `DataKey` | `Address` | `init`, `set_liquidity_source` | Reserve address. Defaults to contract address. |
+| `DataKey::DrawMinIntervalSeconds` | `DataKey` | `u64` | `set_draw_min_interval` | Minimum per-borrower draw interval in seconds. Absent = disabled. |
 | `Symbol("reentrancy")` | `Symbol` | `bool` | `set_reentrancy_guard`, `clear_reentrancy_guard` | Defense-in-depth flag. Cleared on every code path. |
 | `Symbol("rate_cfg")` | `Symbol` | `RateChangeConfig` | `set_rate_change_limits` | Admin-configurable rate-change governance. |
 | `DataKey::DrawsFrozen` | `DataKey` | `bool` | `freeze_draws`, `unfreeze_draws` | Global emergency draw freeze. Absent = `false` (draws allowed). |
