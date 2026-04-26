@@ -504,7 +504,7 @@ fn state_transition_matrix() {
 /// Debt record is fully preserved across Active → Suspended → Defaulted.
 #[test]
 fn debt_record_preserved_through_suspend_then_default() {
-    let (env, admin, contract_id) = setup_env();
+    let (env, _admin, contract_id) = setup_env();
     let client = CreditClient::new(&env, &contract_id);
     let borrower = open_line(&env, &contract_id, 1_000, 600);
 
@@ -539,7 +539,7 @@ fn debt_record_preserved_through_suspend_then_default() {
 /// No double-counting of interest across Defaulted → Active (reinstate).
 #[test]
 fn no_double_interest_on_reinstate() {
-    let (env, admin, contract_id) = setup_env();
+    let (env, _admin, contract_id) = setup_env();
     let client = CreditClient::new(&env, &contract_id);
     let borrower = open_line(&env, &contract_id, 1_000, 500);
 
@@ -552,7 +552,7 @@ fn no_double_interest_on_reinstate() {
     let interest_at_default = after_default.accrued_interest;
 
     // Reinstate immediately (no time elapsed).
-    client.reinstate_credit_line(&borrower);
+    client.reinstate_credit_line(&borrower, &CreditStatus::Active);
     let after_reinstate = client.get_credit_line(&borrower).unwrap();
     assert_eq!(after_reinstate.status, CreditStatus::Active);
     assert_accounting_invariant(&after_reinstate, "after reinstate");
@@ -672,7 +672,7 @@ fn reinstate_only_valid_from_defaulted() {
         }
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.reinstate_credit_line(&borrower);
+            client.reinstate_credit_line(&borrower, &CreditStatus::Active);
         }));
         assert!(result.is_err(), "reinstate from {from:?} must fail");
     }
@@ -769,7 +769,7 @@ fn full_lifecycle_invariant_chain() {
     );
 
     // Reinstate.
-    client.reinstate_credit_line(&borrower);
+    client.reinstate_credit_line(&borrower, &CreditStatus::Active);
     let c4 = client.get_credit_line(&borrower).unwrap();
     assert_eq!(c4.status, CreditStatus::Active);
     assert_accounting_invariant(&c4, "c4 Reinstated");

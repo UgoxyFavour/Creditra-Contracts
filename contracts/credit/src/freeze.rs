@@ -20,7 +20,7 @@
 //! transparent: the current state is readable by anyone via `is_draws_frozen`.
 
 use crate::auth::require_admin_auth;
-use crate::events::{publish_draws_frozen_event, DrawsFrozenEvent};
+use crate::events::publish_draws_frozen_event;
 use crate::storage::DataKey;
 use soroban_sdk::Env;
 
@@ -38,16 +38,9 @@ use soroban_sdk::Env;
 /// # Events
 /// Emits [`DrawsFrozenEvent`] with `frozen = true`.
 pub fn freeze_draws(env: Env) {
-    let admin = require_admin_auth(&env);
+    require_admin_auth(&env);
     env.storage().instance().set(&DataKey::DrawsFrozen, &true);
-    publish_draws_frozen_event(
-        &env,
-        DrawsFrozenEvent {
-            frozen: true,
-            timestamp: env.ledger().timestamp(),
-            actor: admin,
-        },
-    );
+    publish_draws_frozen_event(&env, true);
 }
 
 /// Unfreeze draws globally (admin only).
@@ -63,16 +56,9 @@ pub fn freeze_draws(env: Env) {
 /// # Events
 /// Emits [`DrawsFrozenEvent`] with `frozen = false`.
 pub fn unfreeze_draws(env: Env) {
-    let admin = require_admin_auth(&env);
+    require_admin_auth(&env);
     env.storage().instance().set(&DataKey::DrawsFrozen, &false);
-    publish_draws_frozen_event(
-        &env,
-        DrawsFrozenEvent {
-            frozen: false,
-            timestamp: env.ledger().timestamp(),
-            actor: admin,
-        },
-    );
+    publish_draws_frozen_event(&env, false);
 }
 
 /// Returns `true` when draws are globally frozen.

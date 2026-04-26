@@ -11,8 +11,8 @@
 
 use crate::auth::require_admin_auth;
 use crate::events::{publish_risk_parameters_updated, RiskParametersUpdatedEvent};
-use crate::storage::{assert_not_paused, rate_cfg_key, rate_formula_key};
-use crate::types::{ContractError, CreditLineData, RateChangeConfig, RateFormulaConfig};
+use crate::storage::{rate_cfg_key, rate_formula_key};
+use crate::types::{CreditLineData, CreditStatus, RateChangeConfig, RateFormulaConfig};
 use soroban_sdk::{Address, Env};
 
 /// Maximum interest rate in basis points (100%).
@@ -47,23 +47,42 @@ pub fn compute_rate_from_score(cfg: &RateFormulaConfig, risk_score: u32) -> u32 
     raw.clamp(cfg.min_rate_bps, upper)
 }
 
+/// Set optional global rate-change caps (admin only).
+pub fn set_rate_change_limits(env: Env, max_rate_change_bps: u32, rate_change_min_interval: u64) {
+    assert_not_paused(&env);
+    require_admin_auth(&env);
+    let cfg = RateChangeConfig {
+        max_rate_change_bps,
+        rate_change_min_interval,
+    };
+    env.storage().instance().set(&rate_cfg_key(&env), &cfg);
+}
+
 /// Update risk parameters for an existing credit line (admin only).
 ///
 /// This function handles updating the credit limit, risk score, and interest rate.
 /// If a dynamic rate formula is configured, the `interest_rate_bps` parameter is
 /// ignored and the rate is re-calculated based on the provided `risk_score`.
 ///
+/// ## Limit Decrease Behavior
+///
+/// When the new `credit_limit` is below the current `utilized_amount`:
+/// - The credit line transitions to `Restricted` status.
+/// - The borrower **cannot draw additional credit** until the utilization is reduced.
+/// - **Repayments are still allowed**, enabling the borrower to reduce utilization back below the new limit.
+/// - This avoids forced liquidation and gives the borrower a grace period to cure.
+///
 /// # Arguments
 /// * `env` - The Soroban environment.
 /// * `borrower` - The address of the borrower.
-/// * `credit_limit` - The new credit limit (must be >= 0 and >= current utilization).
+/// * `credit_limit` - The new credit limit (must be >= 0).
 /// * `interest_rate_bps` - The manual interest rate (ignored if formula is enabled).
 /// * `risk_score` - The new risk score (0-100).
 ///
 /// # Panics
 /// * If caller is not admin.
 /// * If credit line does not exist.
-/// * If validation fails (limit < utilization, score > 100, etc.).
+/// * If validation fails (score > 100, etc.).
 /// * If rate change exceeds configured limits.
 /// * If the protocol is paused.
 pub fn update_risk_parameters(
@@ -87,9 +106,6 @@ pub fn update_risk_parameters(
 
     if credit_limit < 0 {
         env.panic_with_error(ContractError::NegativeLimit);
-    }
-    if credit_limit < credit_line.utilized_amount {
-        env.panic_with_error(ContractError::OverLimit);
     }
     if risk_score > MAX_RISK_SCORE {
         env.panic_with_error(ContractError::ScoreTooHigh);
@@ -137,20 +153,24 @@ pub fn update_risk_parameters(
         credit_line.last_rate_update_ts = env.ledger().timestamp();
     }
 
+    // Handle limit decrease relative to utilization.
+    // If new limit < utilized amount, transition to Restricted status.
+    // This prevents new draws but allows repayments.
+    if credit_limit < credit_line.utilized_amount {
+        credit_line.status = CreditStatus::Restricted;
+    } else if credit_line.status == CreditStatus::Restricted && credit_limit >= credit_line.utilized_amount {
+        // Auto-cure: if previously Restricted and limit is now at or above utilization, return to Active.
+        credit_line.status = CreditStatus::Active;
+    }
+    // Note: if status is Suspended, Defaulted, or Closed, we don't force a transition.
+    // The admin must explicitly change status using dedicated methods.
+
     credit_line.credit_limit = credit_limit;
     credit_line.interest_rate_bps = effective_rate;
     credit_line.risk_score = risk_score;
     env.storage().persistent().set(&borrower, &credit_line);
 
-    publish_risk_parameters_updated(
-        &env,
-        RiskParametersUpdatedEvent {
-            borrower: borrower.clone(),
-            credit_limit,
-            interest_rate_bps: effective_rate,
-            risk_score,
-        },
-    );
+    publish_risk_parameters_updated(&env, &borrower, credit_limit, effective_rate, risk_score);
 }
 
 /// Retrieve the rate formula configuration from instance storage, if set.
