@@ -19,6 +19,25 @@ pub fn publish_bid_refunded_event(env: &Env, prev_bidder: Address, amount: i128)
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionClosedEvent {
+    pub auction_id: Symbol,
+    pub winner: Option<Address>,
+    pub amount: i128,
+}
+
+pub fn publish_auction_closed_event(env: &Env, auction_id: Symbol, winner: Option<Address>, amount: i128) {
+    env.events().publish(
+        (symbol_short!("AUC_CLOSE"), symbol_short!("auction")),
+        AuctionClosedEvent {
+            auction_id,
+            winner,
+            amount,
+        },
+    );
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DefaultLiquidationSettlementEvent {
     pub auction_id: Symbol,
     pub credit_contract: Address,

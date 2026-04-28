@@ -70,8 +70,11 @@ mod tests {
         let contract_id = env.register(Auction, ());
         let client = AuctionClient::new(&env, &contract_id);
 
-        client.place_bid(&Symbol::new(&env, "auc1"), &alice, &100_i128);
-        client.place_bid(&Symbol::new(&env, "auc1"), &bob, &200_i128);
+        let auction_id = Symbol::new(&env, "auc1");
+        client.init_auction(&auction_id, &0, &1000, &50_i128); // start 0, end 1000, min 50
+
+        client.place_bid(&auction_id, &alice, &100_i128);
+        client.place_bid(&auction_id, &bob, &200_i128);
 
         let refund_events = refunded_events(&env);
         assert_eq!(refund_events.len(), 1);
@@ -97,6 +100,8 @@ mod tests {
         let client = AuctionClient::new(&env, &contract_id);
         let auction_id = Symbol::new(&env, AUCTION_ID);
 
+        client.init_auction(&auction_id, &0, &u64::MAX, &1_i128); // long auction, min 1
+
         let mut seed: u64 = 0xdeadbeefcafebabe;
         let mut expected: Option<(Address, i128)> = None;
         let mut expected_refunds = 0usize;
@@ -120,12 +125,12 @@ mod tests {
 
             expected = Some((bidder.clone(), amount));
 
-            let stored: Option<crate::AuctionState> =
+            let stored: Option<crate::types::AuctionState> =
                 env.as_contract(&contract_id, || env.storage().persistent().get(&auction_id));
             assert!(stored.is_some(), "stored state must exist");
             let s = stored.unwrap();
-            assert_eq!(s.bidder, bidder);
-            assert_eq!(s.amount, amount);
+            assert_eq!(s.highest_bidder.unwrap(), bidder);
+            assert_eq!(s.highest_bid, amount);
 
             let invalid_bidder_idx = pick_index(&mut seed, 0..bidders.len());
             let invalid_attempt = catch_unwind(AssertUnwindSafe(|| {
@@ -133,11 +138,11 @@ mod tests {
             }));
             assert!(invalid_attempt.is_err(), "equal bid unexpectedly accepted");
 
-            let stored_after_invalid: crate::AuctionState = env
+            let stored_after_invalid: crate::types::AuctionState = env
                 .as_contract(&contract_id, || env.storage().persistent().get(&auction_id))
                 .unwrap();
-            assert_eq!(stored_after_invalid.bidder, bidder);
-            assert_eq!(stored_after_invalid.amount, amount);
+            assert_eq!(stored_after_invalid.highest_bidder.unwrap(), bidder);
+            assert_eq!(stored_after_invalid.highest_bid, amount);
             assert_eq!(refunded_events(&env).len(), expected_refunds);
         }
     }
@@ -188,6 +193,8 @@ mod tests {
         let mut expected: Option<(usize, i128)> = None;
         let mut seed: u64 = 0x1234_5678_9abc_def0;
         let auction_id = Symbol::new(&env, "refund_auc");
+
+        client.init_auction(&auction_id, &0, &u64::MAX, &1_i128);
 
         for _ in 0..FUZZ_STEPS {
             let bidder_idx = pick_index(&mut seed, 0..bidders.len());
@@ -242,6 +249,8 @@ mod tests {
         let client = AuctionClient::new(&env, &contract_id);
         let auction_id = Symbol::new(&env, "close_auc");
 
+        client.init_auction(&auction_id, &0, &u64::MAX, &1_i128);
+
         let mut seed: u64 = 0xa11ce_f00d_cafe_beef;
         let mut highest = 0_i128;
         for _ in 0..8 {
@@ -250,7 +259,7 @@ mod tests {
             client.place_bid(&auction_id, &bidders[idx], &highest);
         }
 
-        let expected_state: crate::AuctionState = env
+        let expected_state: crate::types::AuctionState = env
             .as_contract(&contract_id, || env.storage().persistent().get(&auction_id))
             .unwrap();
         let refunds_before_close = refunded_events(&env).len();
@@ -259,17 +268,19 @@ mod tests {
 
         for _ in 0..16 {
             let idx = pick_index(&mut seed, 0..bidders.len());
-            let attempted_amount = next_amount_above(&mut seed, expected_state.amount);
+            let attempted_amount = next_amount_above(&mut seed, expected_state.highest_bid);
 
             let attempt = catch_unwind(AssertUnwindSafe(|| {
                 client.place_bid(&auction_id, &bidders[idx], &attempted_amount);
             }));
             assert!(attempt.is_err(), "closed auction accepted a new bid");
 
-            let stored_state: crate::AuctionState = env
+            let stored_state: crate::types::AuctionState = env
                 .as_contract(&contract_id, || env.storage().persistent().get(&auction_id))
                 .unwrap();
-            assert_eq!(stored_state, expected_state);
+            assert_eq!(stored_state.highest_bidder, expected_state.highest_bidder);
+            assert_eq!(stored_state.highest_bid, expected_state.highest_bid);
+            assert_eq!(stored_state.status, AuctionStatus::Closed);
             assert_eq!(refunded_events(&env).len(), refunds_before_close);
         }
     }
@@ -284,6 +295,7 @@ mod tests {
         let bidder = Address::generate(&env);
         let auction_id = Symbol::new(&env, "liq_open");
 
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
         client.place_bid(&auction_id, &bidder, &100_i128);
 
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -310,6 +322,7 @@ mod tests {
         let credit_contract = Address::generate(&env);
         let auction_id = Symbol::new(&env, "liq_closed");
 
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
         client.place_bid(&auction_id, &bidder, &420_i128);
         client.close_auction(&auction_id);
         client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
@@ -328,5 +341,72 @@ mod tests {
         }));
         assert!(replay.is_err(), "settlement replay should panic");
         assert_eq!(settlement_events(&env).len(), 1);
+    }
+
+    #[test]
+    fn zero_bid_auction_settles_with_borrower_as_winner() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+
+        let borrower = Address::generate(&env);
+        let credit_contract = Address::generate(&env);
+        let auction_id = Symbol::new(&env, "zero_bid");
+
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
+        // no bids
+        client.close_auction(&auction_id);
+        client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
+
+        let events = settlement_events(&env);
+        assert_eq!(events.len(), 1);
+        let evt = events.last().unwrap();
+        assert_eq!(evt.winner, borrower);
+        assert_eq!(evt.recovered_amount, 0_i128);
+    }
+
+    #[test]
+    fn bid_after_end_time_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1001); // past end time
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+
+        let bidder = Address::generate(&env);
+        let auction_id = Symbol::new(&env, "timed_out");
+
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
+
+        let attempt = catch_unwind(AssertUnwindSafe(|| {
+            client.place_bid(&auction_id, &bidder, &100_i128);
+        }));
+        assert!(attempt.is_err(), "bid after end time should be rejected");
+    }
+
+    #[test]
+    fn close_auction_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+
+        let bidder = Address::generate(&env);
+        let auction_id = Symbol::new(&env, "close_event");
+
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
+        client.place_bid(&auction_id, &bidder, &100_i128);
+        client.close_auction(&auction_id);
+
+        // Check close event
+        let close_events = env.events().all().iter().filter(|(_contract, topics, _data)| {
+            let t0: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+            t0 == Symbol::new(&env, "AUC_CLOSE")
+        }).collect::<Vec<_>>();
+        assert_eq!(close_events.len(), 1);
     }
 }
