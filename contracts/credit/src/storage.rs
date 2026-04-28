@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 use crate::types::ContractError;
 use soroban_sdk::{contracttype, Env, Symbol};
 
@@ -23,6 +25,10 @@ pub enum DataKey {
     /// When set, draw_credit enforces: utilized_amount <= credit_limit * cap_bps / 10_000.
     UtilizationCapBps(Address),
 }
+
+/// Maximum number of credit lines returned per page.
+/// Limits gas consumption and response size for enumeration queries.
+pub const MAX_ENUMERATION_LIMIT: u32 = 100;
 
 pub fn admin_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin")

@@ -230,3 +230,49 @@ Residual risk:
   clawback primitive.
 - Compromised admin key can still misuse reversal controls within the allowed
   window.
+
+## Ledger Timestamp Trust Assumptions
+
+### Timestamp source and trust boundary
+
+Soroban ledger timestamps (`env.ledger().timestamp()`) are set by the Stellar
+validator network and are expected to be monotonically non-decreasing across
+consecutive ledgers. The contract **trusts** this property for correctness of
+time-dependent logic (rate-change intervals, suspension grace periods, interest
+accrual).
+
+### Threat: regressed or manipulated ledger timestamp
+
+Threat: a validator coalition or test environment supplies a ledger timestamp
+that is less than or equal to a previously stored timestamp, causing
+time-dependent fields to move backwards.
+
+Impact without mitigation:
+- `last_rate_update_ts` could regress, bypassing the `rate_change_min_interval`
+  cooldown and allowing unlimited rapid rate changes.
+- `suspension_ts` could regress, corrupting grace-period calculations.
+- `last_accrual_ts` could regress, causing double-accrual of interest.
+
+### Mitigations (application-layer monotonicity guards)
+
+The contract enforces monotonicity at the application layer for all mutable
+timestamp fields:
+
+| Field               | Location       | Guard behavior |
+|---------------------|----------------|----------------|
+| `last_rate_update_ts` | `risk.rs`    | `assert_ts_monotonic` — reverts with `TimestampRegression` (19) if `new_ts <= stored_ts` and `stored_ts != 0` |
+| `suspension_ts`     | `lifecycle.rs` | `assert_ts_monotonic` — same guard; `suspension_ts = 0` (cleared on reinstate) always passes |
+| `last_accrual_ts`   | `accrual.rs`   | Early-return no-op if `now <= last_accrual_ts`; does not revert but silently skips accrual |
+
+The helper `storage::assert_ts_monotonic(env, stored_ts, new_ts)` is the
+single source of truth for this invariant. A `stored_ts` of zero is treated as
+"never written" and always passes (first-write semantics).
+
+### Residual risk
+
+- Validator-level timestamp manipulation is a chain-level threat outside the
+  contract's control. The application guard provides defense-in-depth but
+  cannot prevent a malicious validator majority from stalling time.
+- The `last_accrual_ts` guard silently skips rather than reverts; this is
+  intentional to avoid blocking repayments during a clock anomaly, at the cost
+  of potentially under-accruing interest for that ledger.

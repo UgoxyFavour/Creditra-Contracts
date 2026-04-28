@@ -150,7 +150,9 @@ pub fn update_risk_parameters(
             }
         }
 
-        credit_line.last_rate_update_ts = env.ledger().timestamp();
+        let new_ts = env.ledger().timestamp();
+        assert_ts_monotonic(&env, credit_line.last_rate_update_ts, new_ts);
+        credit_line.last_rate_update_ts = new_ts;
     }
 
     // Handle limit decrease relative to utilization.
@@ -167,7 +169,6 @@ pub fn update_risk_parameters(
 
     credit_line.credit_limit = credit_limit;
     credit_line.interest_rate_bps = effective_rate;
-    credit_line.risk_score = risk_score;
     env.storage().persistent().set(&borrower, &credit_line);
 
     publish_risk_parameters_updated(&env, &borrower, credit_limit, effective_rate, risk_score);

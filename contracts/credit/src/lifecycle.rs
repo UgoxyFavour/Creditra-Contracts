@@ -52,7 +52,9 @@ fn suspend_credit_line_internal(env: &Env, borrower: Address) {
     }
 
     credit_line.status = CreditStatus::Suspended;
-    credit_line.suspension_ts = env.ledger().timestamp();
+    let new_ts = env.ledger().timestamp();
+    assert_ts_monotonic(&env, credit_line.suspension_ts, new_ts);
+    credit_line.suspension_ts = new_ts;
     env.storage().persistent().set(&borrower, &credit_line);
 
     publish_credit_line_event(
