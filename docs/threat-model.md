@@ -111,6 +111,13 @@ Mitigations (operational):
 - strict key rotation and break-glass procedure;
 - on-chain monitoring/alerts for admin method calls.
 
+Two-step admin rotation mitigation now exists on-chain:
+
+- `propose_admin(new_admin, delay_seconds)` by current admin only;
+- `accept_admin()` by proposed admin only;
+- optional delay window enforced via stored acceptance timestamp;
+- each phase emits an audit event for monitoring.
+
 ### 6) Operational and liveness risks
 
 Threats:
@@ -118,12 +125,29 @@ Threats:
 - Wrong liquidity source address.
 - Inadequate reserve balance.
 - Stale operational processes (no monitoring).
+- `freeze_draws` left active outside a declared maintenance window.
 
 Mitigations:
 
 - pre-deployment and post-change checklist;
 - automated reserve health checks;
-- incident runbooks and rollback plans for config mistakes.
+- incident runbooks and rollback plans for config mistakes;
+- monitoring alert on `DrawsFrozenEvent { frozen: true }` outside declared windows and on freeze durations exceeding operational thresholds (e.g. > 1 hour).
+
+### 7) Admin abuses global draw freeze
+
+Threat: compromised or malicious admin calls `freeze_draws` to block all borrowers from drawing, causing protocol-wide liveness failure.
+
+Impact: all `draw_credit` calls revert with `ContractError::DrawsFrozen` (15) until unfrozen. Repayments are unaffected — borrowers can always reduce their debt.
+
+Mitigations:
+
+- `is_draws_frozen` is publicly readable; off-chain monitoring can detect and alert on unexpected freezes immediately.
+- `DrawsFrozenEvent` includes `actor` and `timestamp` fields for governance audit trails.
+- Operational policy: require multi-party approval or a declared maintenance window before invoking `freeze_draws`.
+- The flag is distinct from per-line `Suspended` — it does not mutate borrower state, so no remediation of individual lines is needed after unfreeze.
+
+Residual risk: admin key compromise remains the root threat. Mitigated operationally by hardware-backed/multisig admin accounts and real-time monitoring.
 
 ## Immutable Upgrade Posture
 
@@ -159,3 +183,96 @@ Recommended operational policy:
 - Recommended before production: independent review focused on auth boundaries,
   external token trust assumptions, and admin key operational controls.
 - Re-run threat model on each material contract behavior change.
+
+
+### 7) Large single-transaction draw (compromised borrower key or buggy integrator)
+
+Threat: A compromised borrower private key or a buggy integrator submits an
+oversized single-transaction draw, draining a disproportionate share of the
+liquidity reserve in one ledger.
+
+Mitigation: Admin can configure a protocol-wide per-transaction draw cap via
+`set_max_draw_amount`. Draws above the cap revert with
+`ContractError::DrawExceedsMaxAmount` before any state or token transfer
+occurs.
+
+Residual risk:
+- Cap is unset by default; operators must actively configure it for the
+  protection to apply.
+- A compromised admin key can raise or remove the cap.
+- Multiple sequential draws just at or under the cap are not rate-limited
+  by this control; separate rate-limiting or circuit-breaker logic would
+  be needed to address that threat.
+
+Operational recommendation: set `max_draw_amount` to a value reflecting the
+largest legitimate single draw expected during normal protocol operation
+immediately after deployment initialization.
+
+### 8) Admin draw reversal misuse and token-accounting divergence
+
+Threat: An operator uses `reverse_draw` outside intended operational procedure,
+or users incorrectly assume reversal automatically claws tokens back from the
+borrower.
+
+Mitigation:
+- `reverse_draw` is admin-authenticated and time-bounded to a 1-hour window from
+  `original_ts`.
+- Reversal is borrower-bound and draw-bound using stored audit records keyed by
+  `(borrower, original_ts)`.
+- Every reversal emits a dedicated `("credit", "draw_rev")` audit event with
+  reason code, actor, and amount for monitoring and post-incident review.
+- Contract behavior is explicit: reversal is accounting-only and does not call
+  token transfer APIs.
+
+Residual risk:
+- Accounting reversal can reduce outstanding debt while drawn tokens remain with
+  the borrower; this is a conscious emergency-correction tradeoff, not a
+  clawback primitive.
+- Compromised admin key can still misuse reversal controls within the allowed
+  window.
+
+## Ledger Timestamp Trust Assumptions
+
+### Timestamp source and trust boundary
+
+Soroban ledger timestamps (`env.ledger().timestamp()`) are set by the Stellar
+validator network and are expected to be monotonically non-decreasing across
+consecutive ledgers. The contract **trusts** this property for correctness of
+time-dependent logic (rate-change intervals, suspension grace periods, interest
+accrual).
+
+### Threat: regressed or manipulated ledger timestamp
+
+Threat: a validator coalition or test environment supplies a ledger timestamp
+that is less than or equal to a previously stored timestamp, causing
+time-dependent fields to move backwards.
+
+Impact without mitigation:
+- `last_rate_update_ts` could regress, bypassing the `rate_change_min_interval`
+  cooldown and allowing unlimited rapid rate changes.
+- `suspension_ts` could regress, corrupting grace-period calculations.
+- `last_accrual_ts` could regress, causing double-accrual of interest.
+
+### Mitigations (application-layer monotonicity guards)
+
+The contract enforces monotonicity at the application layer for all mutable
+timestamp fields:
+
+| Field               | Location       | Guard behavior |
+|---------------------|----------------|----------------|
+| `last_rate_update_ts` | `risk.rs`    | `assert_ts_monotonic` — reverts with `TimestampRegression` (19) if `new_ts <= stored_ts` and `stored_ts != 0` |
+| `suspension_ts`     | `lifecycle.rs` | `assert_ts_monotonic` — same guard; `suspension_ts = 0` (cleared on reinstate) always passes |
+| `last_accrual_ts`   | `accrual.rs`   | Early-return no-op if `now <= last_accrual_ts`; does not revert but silently skips accrual |
+
+The helper `storage::assert_ts_monotonic(env, stored_ts, new_ts)` is the
+single source of truth for this invariant. A `stored_ts` of zero is treated as
+"never written" and always passes (first-write semantics).
+
+### Residual risk
+
+- Validator-level timestamp manipulation is a chain-level threat outside the
+  contract's control. The application guard provides defense-in-depth but
+  cannot prevent a malicious validator majority from stalling time.
+- The `last_accrual_ts` guard silently skips rather than reverts; this is
+  intentional to avoid blocking repayments during a clock anomaly, at the cost
+  of potentially under-accruing interest for that ledger.
